@@ -85,10 +85,15 @@ class Log(object):
         self.lines.extend(text.splitlines())
         return self
 
+    def write(self, path):
+        with open(path, "w") as out:
+            out.write("\n".join(self.lines) + "\n")
+        return path
+
     def run(self, *args):
         handle, path = tempfile.mkstemp(suffix=".log")
-        with os.fdopen(handle, "w") as out:
-            out.write("\n".join(self.lines) + "\n")
+        os.close(handle)
+        self.write(path)
         buffer = io.StringIO()
         try:
             with contextlib.redirect_stdout(buffer):
@@ -97,15 +102,60 @@ class Log(object):
             os.unlink(path)
         return buffer.getvalue()
 
+    def scan(self):
+        handle, path = tempfile.mkstemp(suffix=".log")
+        os.close(handle)
+        try:
+            return klipper_report.scan([self.write(path)])
+        finally:
+            os.unlink(path)
+
 
 class ReportTests(unittest.TestCase):
+    def test_last_print_reads_only_its_own_stats(self):
+        log = Log().add("Starting SD card print (position 0)").stats(10, u1_awake=4.0)
+        log.add("Finished SD card print").stats(30, u1_awake=0.1)
+        log.add("Starting SD card print (position 0)").stats(20, u1_awake=1.0).add("Finished SD card print")
+        log.stats(30, u1_awake=3.0)
+        out = log.run()
+        self.assertIn("Board 'U_1' (stm32f401xc): busy up to 20% (fine)", out)
+        self.assertIn("19 s of Stats, finished", out)
+
+    def test_a_print_across_two_days_files(self):
+        first = Log().add("Starting SD card print (position 0)").stats(10, u1_awake=0.5)
+        second = Log()
+        second.lines = ["=============== Log rollover at Sun Nov 22 00:00:00 2026 ==============="] + \
+            HEADER.splitlines()[2:]
+        second.t, second.cpu, second.print_time = first.t, first.cpu, first.print_time
+        second.u1_bytes, second.u1_resent = first.u1_bytes, first.u1_resent
+        second.stats(10, u1_awake=4.0).add("Finished SD card print")
+        folder = tempfile.mkdtemp()
+        try:
+            path = os.path.join(folder, "klippy.log")
+            first.write(path + ".2026-11-21")
+            second.write(path)
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                klipper_report.main([path, "--all"])
+            out = buffer.getvalue()
+        finally:
+            for name in os.listdir(folder):
+                os.unlink(os.path.join(folder, name))
+            os.rmdir(folder)
+        self.assertIn("busy up to 80% (near its limit)", out)
+        self.assertIn("finished", out)
+
+    def test_no_print_reports_the_last_stats(self):
+        out = Log().stats(30).run()
+        self.assertIn("No print in this log. The last 30 s of Stats instead", out)
+
     def test_a_clean_print(self):
         out = Log().add("Starting SD card print (position 0)").stats(60).add("Finished SD card print").run()
         self.assertIn("'U_1': stm32f401xc at 84 MHz, serial 500000 baud", out)
         self.assertIn("stepper_z at 128 microsteps", out)
         self.assertIn("'mcu': stm32f103xe at 72 MHz", out)
         self.assertIn("extruder at 16 microsteps", out)
-        self.assertIn("min of Stats, finished", out)
+        self.assertIn("59 s of Stats, finished", out)
         self.assertIn("Klipper used up to 30% of a CPU core", out)
         self.assertIn("main loop never stopped", out)
         self.assertIn("Board 'U_1' (stm32f401xc): busy up to 10% (fine)", out)
@@ -156,13 +206,13 @@ class ReportTests(unittest.TestCase):
     def test_a_new_days_file_continues_the_session(self):
         log = Log().stats(5).add("=============== Log rollover at Sun Nov 22 00:00:00 2026 ===============")
         log.add("\n".join(HEADER.splitlines()[2:])).stats(5)
-        sessions = klipper_report.parse(log.lines)
+        sessions = log.scan().sessions
         self.assertEqual(len(sessions), 1)
-        self.assertEqual(len(sessions[0].stats), 10)
+        self.assertEqual(sessions[0].stat_count, 10)
 
     def test_a_restart_starts_a_new_session(self):
         log = Log().stats(5).add("\n".join(HEADER.splitlines()[1:]).replace("1000.0)", "2000.0)"))
-        sessions = klipper_report.parse(log.stats(5).lines)
+        sessions = log.stats(5).scan().sessions
         self.assertEqual(len(sessions), 2)
         self.assertEqual(sessions[1].boards["U_1"]["MCU"], "stm32f401xc")
         self.assertIn("stepper_x", dict(sessions[1].motors()["U_1"]))

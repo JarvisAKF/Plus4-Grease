@@ -22,6 +22,7 @@ the 5 s it covers, its task load is mcu_task_avg + 3 * mcu_task_stddev against 2
 This file runs on the printer's Python 3.7, so it uses 3.7 syntax and library features only.
 """
 import argparse
+import collections
 import glob
 import os
 import re
@@ -83,8 +84,9 @@ class Session(object):
         self.started, self.epoch, self.mono = started, epoch, mono
         self.boards = {}       # name -> {"MCU": chip, "CLOCK_FREQ": .., "SERIAL_BAUD": ..}
         self.config = {}       # section -> {option: value}
-        self.stats = []        # (eventtime, globals, boards, heaters)
-        self.events = []       # (index into stats, kind, text)
+        self.stat_count = 0
+        self.last_t = None     # the last Stats line's eventtime
+        self.events = []       # (kind, text, eventtime of the Stats line before it, Stats entries before it)
 
     def wall(self, eventtime):
         """'15:40:07' for a Stats eventtime, from the start line's clock and monotonic time."""
@@ -104,134 +106,214 @@ class Session(object):
         return found
 
 
-def read_config(lines, start):
-    """The '===== Config file =====' block from start: (sections, index after it)."""
+def read_config(lines):
+    """The lines of a '===== Config file =====' block: {section: {option: value}}."""
     sections, section = {}, None
-    i = start + 1
-    while i < len(lines) and not lines[i].startswith("======================="):
-        line = lines[i].rstrip("\n")
+    for line in lines:
         if line.startswith("[") and line.endswith("]"):
             section = line[1:-1]
             sections.setdefault(section, {})
         elif section and "=" in line and not line.startswith((" ", "\t", "#")):
             key, _, value = line.partition("=")
             sections[section][key.strip()] = value.strip()
-        i += 1
-    return sections, i
+    return sections
 
 
-def parse(lines):
-    sessions = [Session()]
-    rollover = False
-    i = 0
-    while i < len(lines):
-        line = lines[i].rstrip("\n")
-        current = sessions[-1]
-        if line.startswith("=============== Log rollover at"):
-            # A new day's file repeats the config and board lines at its top; the session goes on.
-            rollover = True
-            i += 1
-            continue
-        match = START.match(line)
-        if match:
-            fresh = Session(match.group(1), float(match.group(2)), float(match.group(3)))
-            # The config and board lines come before the start line; keep them with the new session.
-            if not current.stats and not current.events:
-                fresh.boards, fresh.config = current.boards, current.config
-                sessions[-1] = fresh
-            else:
-                sessions.append(fresh)
-            i += 1
-            continue
-        if line == "===== Config file =====":
-            config, i = read_config(lines, i)
-            if rollover and current.config:
-                rollover = False
-                i += 1
+def stats_time(raw):
+    try:
+        return float(raw[6:raw.index(b":")])
+    except ValueError:
+        return None
+
+
+def parse_entry(raw):
+    match = STATS.match(raw.decode("utf-8", "replace").rstrip("\n"))
+    if not match:
+        return None
+    top, boards, heaters = parse_stats(match.group(2))
+    return float(match.group(1)), top, boards, heaters
+
+
+class Scan(object):
+    """One cheap pass over the logs, line by line, keeping only what the report needs: the sessions with
+    their boards, config, and shutdowns (each with the Stats lines just before it), where the last print
+    starts and ends, and the last few minutes of Stats. A day of klippy.log can be 60 MB or more, which
+    the Pi can't hold in memory, so Stats lines are only parsed for those stretches."""
+
+    def __init__(self):
+        self.sessions = [Session()]
+        self.window = collections.deque(maxlen=int(LOOKBACK) + 5)
+        self.tail = collections.deque(maxlen=600)
+        self.last_print = None
+        self.rollover = False
+        self.place = (0, 0)
+
+    def _new_session(self, session):
+        self._close_print("Klipper restarted before the print finished")
+        self.sessions.append(session)
+        self.window.clear()
+        self.tail.clear()
+
+    def _close_print(self, text, place=None):
+        if self.last_print and self.last_print["end"] is None:
+            self.last_print["end"], self.last_print["ended"] = place or self.place, text
+
+    def read(self, index, handle):
+        offset = 0
+        config_lines = None
+        for raw in iter(handle.readline, b""):
+            offset += len(raw)
+            self.place = (index, offset)
+            current = self.sessions[-1]
+            if config_lines is not None:
+                if raw.startswith(b"======================="):
+                    self._config(read_config(config_lines))
+                    config_lines = None
+                else:
+                    config_lines.append(raw.decode("utf-8", "replace").rstrip("\n"))
                 continue
-            rollover = False
-            if current.stats or current.events:
-                current = Session()
-                sessions.append(current)
-            current.config = config
-            i += 1
-            continue
-        match = MCU_CONFIG.match(line)
-        if match:
-            constants = dict(part.split("=", 1) for part in match.group(2).split() if "=" in part)
-            current.boards[match.group(1)] = constants
-        match = STATS.match(line)
-        if match:
-            top, boards, heaters = parse_stats(match.group(2))
-            current.stats.append((float(match.group(1)), top, boards, heaters))
-        elif line.startswith("Starting SD card print"):
-            current.events.append((len(current.stats), "print_start", line))
-        elif line.startswith("Finished SD card print"):
-            current.events.append((len(current.stats), "print_end", line))
-        else:
-            match = SHUTDOWN.match(line)
-            if match:
-                current.events.append((len(current.stats), "shutdown", match.group(1).strip()))
-            match = TIMEOUT.match(line)
-            if match:
-                current.events.append((len(current.stats), "timeout", match.group(1)))
-        i += 1
-    return [s for s in sessions if s.stats or s.events or s.started]
+            if raw.startswith(b"Stats "):
+                self.window.append(raw)
+                self.tail.append(raw)
+                current.stat_count += 1
+                current.last_t = stats_time(raw) or current.last_t
+                continue
+            line = raw.decode("utf-8", "replace").rstrip("\n")
+            if line.startswith("Start printer at"):
+                match = START.match(line)
+                if match:
+                    fresh = Session(match.group(1), float(match.group(2)), float(match.group(3)))
+                    if not current.stat_count and not current.events:
+                        fresh.boards, fresh.config = current.boards, current.config
+                        self._close_print("Klipper restarted before the print finished")
+                        self.sessions[-1] = fresh
+                    else:
+                        self._new_session(fresh)
+            elif line.startswith("=============== Log rollover at"):
+                self.rollover = True
+            elif line == "===== Config file =====":
+                config_lines = []
+            elif line.startswith("MCU '"):
+                match = MCU_CONFIG.match(line)
+                if match:
+                    current.boards[match.group(1)] = dict(
+                        part.split("=", 1) for part in match.group(2).split() if "=" in part)
+            elif line.startswith("Starting SD card print"):
+                self._close_print("a new print started before it finished", place=(index, offset - len(raw)))
+                self.last_print = {"session": current, "start": (index, offset), "end": None, "ended": None}
+            elif line.startswith("Finished SD card print"):
+                if self.last_print and self.last_print["session"] is current:
+                    self._close_print("finished")
+            elif line.startswith("Transition to shutdown state: "):
+                text = line[len("Transition to shutdown state: "):].strip()
+                entries = [e for e in (parse_entry(r) for r in self.window) if e]
+                if entries:
+                    entries = [e for e in entries if entries[-1][0] - e[0] <= LOOKBACK]
+                current.events.append(("shutdown", text, current.last_t, entries))
+                if self.last_print and self.last_print["session"] is current:
+                    self._close_print("Klipper shut down: " + text)
+
+    def _config(self, config):
+        current = self.sessions[-1]
+        if self.rollover and current.config:
+            self.rollover = False
+            return
+        self.rollover = False
+        if current.stat_count or current.events:
+            self._new_session(Session())
+            current = self.sessions[-1]
+        current.config = config
+
+
+def scan(paths, progress=None):
+    """Scan the log files, oldest first. Returns the Scan."""
+    result = Scan()
+    for index, path in enumerate(paths):
+        if progress:
+            progress(path)
+        with open(path, "rb") as handle:
+            result.read(index, handle)
+    result.sessions = [s for s in result.sessions if s.stat_count or s.events or s.started]
+    return result
+
+
+def print_stats(paths, last_print):
+    """Second pass: parse the Stats lines of the last print only, from where it started to where it ended."""
+    (first_file, first_offset), end = last_print["start"], last_print["end"]
+    for index in range(first_file, len(paths)):
+        with open(paths[index], "rb") as handle:
+            offset = 0
+            if index == first_file:
+                handle.seek(first_offset)
+                offset = first_offset
+            for raw in iter(handle.readline, b""):
+                offset += len(raw)
+                if end is not None and (index, offset) > end:
+                    return
+                if raw.startswith(b"Stats "):
+                    entry = parse_entry(raw)
+                    if entry:
+                        yield entry
 
 
 # ------------------------------------------------------------------ figures
 def summarize(stats, session):
-    """Peak figures over a run of Stats lines."""
-    out = {"seconds": 0.0, "cpu_max": None, "cpu_avg": None, "sysload": None, "memavail": None,
+    """Peak figures over Stats entries, in one pass, so it works on a generator of any length."""
+    out = {"seconds": 0.0, "first": None, "cpu_max": None, "cpu_avg": None, "sysload": None, "memavail": None,
            "stall": 0.0, "stall_at": None, "buffer_min": None, "print_stalls": 0, "boards": {}}
-    if not stats:
-        return out
-    out["seconds"] = stats[-1][0] - stats[0][0]
-    cpu, cpu_time, cpu_span = [], 0.0, 0.0
-    for (t0, g0, b0, h0), (t1, g1, b1, h1) in zip(stats, stats[1:]):
-        dt = t1 - t0
-        if dt <= 0:
-            continue
-        if dt <= 1.5 and "cputime" in g0 and "cputime" in g1:
-            used = g1["cputime"] - g0["cputime"]
-            cpu.append(used / dt)
-            cpu_time, cpu_span = cpu_time + used, cpu_span + dt
-        # Stats come every second while Klipper is busy or hot. A longer gap after a line that still had
-        # moves queued means Klipper's main loop didn't get to run.
-        if 1.5 < dt < 120 and g0.get("buffer_time", 0) > 0:
-            if dt - 1.0 > out["stall"]:
-                out["stall"], out["stall_at"] = dt - 1.0, t0
-        if g1.get("print_time", 0) > g0.get("print_time", 0) and "buffer_time" in g1:
-            low = g1["buffer_time"]
-            out["buffer_min"] = low if out["buffer_min"] is None else min(out["buffer_min"], low)
-        for name, b in b1.items():
-            prev = b0.get(name)
-            board = out["boards"].setdefault(name, {"awake": 0.0, "task": 0.0, "link": 0.0, "retransmit": 0,
-                                                     "invalid": 0, "srtt": 0.0})
-            if prev and dt <= 1.5:
-                sent = (b.get("bytes_write", 0) - prev.get("bytes_write", 0)
-                        + b.get("bytes_retransmit", 0) - prev.get("bytes_retransmit", 0))
-                board["link"] = max(board["link"], sent / dt)
-            if prev:
-                board["retransmit"] += max(0, b.get("bytes_retransmit", 0) - prev.get("bytes_retransmit", 0))
-                board["invalid"] += max(0, b.get("bytes_invalid", 0) - prev.get("bytes_invalid", 0))
-    for _, g, b, _ in stats:
-        if "sysload" in g:
-            out["sysload"] = max(out["sysload"] or 0.0, g["sysload"])
-        if "memavail" in g:
-            mem = g["memavail"] / 1024.0
+    cpu_max, cpu_time, cpu_span = None, 0.0, 0.0
+    stall_first = stall_last = None
+    prev = None
+    for entry in stats:
+        t1, g1, b1, _ = entry
+        if out["first"] is None:
+            out["first"] = t1
+        out["seconds"] = t1 - out["first"]
+        if "sysload" in g1:
+            out["sysload"] = max(out["sysload"] or 0.0, g1["sysload"])
+        if "memavail" in g1:
+            mem = g1["memavail"] / 1024.0
             out["memavail"] = mem if out["memavail"] is None else min(out["memavail"], mem)
-        for name, figures in b.items():
+        if "print_stall" in g1:
+            stall_first = g1["print_stall"] if stall_first is None else stall_first
+            stall_last = g1["print_stall"]
+        for name, figures in b1.items():
             board = out["boards"].setdefault(name, {"awake": 0.0, "task": 0.0, "link": 0.0, "retransmit": 0,
                                                      "invalid": 0, "srtt": 0.0})
             board["awake"] = max(board["awake"], 100.0 * figures.get("mcu_awake", 0) / STATS_INTERVAL)
             task = figures.get("mcu_task_avg", 0) + 3 * figures.get("mcu_task_stddev", 0)
             board["task"] = max(board["task"], 100.0 * task / TASK_MAX)
             board["srtt"] = max(board["srtt"], figures.get("srtt", 0))
-    stalls = [g["print_stall"] for _, g, _, _ in stats if "print_stall" in g]
-    out["print_stalls"] = (stalls[-1] - stalls[0]) if stalls else 0
-    if cpu:
-        out["cpu_max"], out["cpu_avg"] = 100.0 * max(cpu), 100.0 * cpu_time / cpu_span
+        if prev is not None:
+            t0, g0, b0, _ = prev
+            dt = t1 - t0
+            if dt > 0:
+                if dt <= 1.5 and "cputime" in g0 and "cputime" in g1:
+                    used = g1["cputime"] - g0["cputime"]
+                    cpu_max = used / dt if cpu_max is None else max(cpu_max, used / dt)
+                    cpu_time, cpu_span = cpu_time + used, cpu_span + dt
+                # Stats come every second while Klipper is busy or hot. A longer gap after a line that still
+                # had moves queued means Klipper's main loop didn't get to run.
+                if 1.5 < dt < 120 and g0.get("buffer_time", 0) > 0 and dt - 1.0 > out["stall"]:
+                    out["stall"], out["stall_at"] = dt - 1.0, t0
+                if g1.get("print_time", 0) > g0.get("print_time", 0) and "buffer_time" in g1:
+                    low = g1["buffer_time"]
+                    out["buffer_min"] = low if out["buffer_min"] is None else min(out["buffer_min"], low)
+                for name, b in b1.items():
+                    before = b0.get(name)
+                    if not before:
+                        continue
+                    board = out["boards"][name]
+                    resent = max(0, b.get("bytes_retransmit", 0) - before.get("bytes_retransmit", 0))
+                    if dt <= 1.5:
+                        sent = b.get("bytes_write", 0) - before.get("bytes_write", 0) + resent
+                        board["link"] = max(board["link"], sent / dt)
+                    board["retransmit"] += resent
+                    board["invalid"] += max(0, b.get("bytes_invalid", 0) - before.get("bytes_invalid", 0))
+        prev = entry
+    out["print_stalls"] = (stall_last - stall_first) if stall_first is not None else 0
+    if cpu_max is not None and cpu_span > 0:
+        out["cpu_max"], out["cpu_avg"] = 100.0 * cpu_max, 100.0 * cpu_time / cpu_span
     for name, board in out["boards"].items():
         baud = number(session.boards.get(name, {}).get("SERIAL_BAUD", "") or "")
         board["link_pct"] = 100.0 * board["link"] / (baud / 10.0) if baud else None
@@ -334,16 +416,6 @@ def explain(message, before, session):
 
 
 # ------------------------------------------------------------------ report
-def last_print(session):
-    starts = [i for i, kind, _ in session.events if kind == "print_start"]
-    if not starts:
-        return None
-    start = starts[-1]
-    end = next((i for i, kind, _ in session.events if i >= start and kind in ("print_end", "shutdown")
-                and (i, kind) != (start, "print_start")), len(session.stats))
-    return start, end
-
-
 def log_files(path, everything):
     path = os.path.expanduser(path)
     if not everything:
@@ -357,24 +429,31 @@ def main(argv=None):
     parser.add_argument("log", nargs="?", default=LOG, help="klippy.log to read (default %(default)s)")
     parser.add_argument("--all", action="store_true", help="also read the older days' logs next to it")
     args = parser.parse_args(argv)
-    lines = []
-    for path in log_files(args.log, args.all):
-        try:
-            with open(path, "r", encoding="utf-8", errors="replace") as handle:
-                lines.extend(handle.readlines())
-        except OSError as error:
-            print("Can't read {}: {}".format(path, error.strerror))
-            return 1
-    sessions = parse(lines)
-    report = print
-    if not sessions:
-        print("No Klipper starts found in the log.")
-        return 0
+    try:
+        os.nice(10)  # stay out of Klipper's way on the Pi
+    except OSError:
+        pass
+    paths = [p for p in log_files(args.log, args.all) if os.path.isfile(p)]
+    if not paths:
+        print("Can't find {}.".format(os.path.expanduser(args.log)))
+        return 1
 
+    def progress(path):
+        print("Reading {} ({:.0f} MB)...".format(path, os.path.getsize(path) / 1e6))
+        sys.stdout.flush()
+
+    result = scan(paths, progress)
+    sessions = result.sessions
+    report = print
+    report("")
+    if not sessions:
+        report("No Klipper starts found in the log.")
+        return 0
     latest = sessions[-1]
     starts = sum(1 for s in sessions if s.started)
-    report("Klipper started {} time{} in this log; the last start was {}.".format(
-        starts, "" if starts == 1 else "s", latest.started or "before the log begins"))
+    report("Klipper started {} time{} in {}; the last start was {}.".format(
+        starts, "" if starts == 1 else "s", "these logs" if len(paths) > 1 else "this log",
+        latest.started or "before the log begins"))
     report("")
     report("Boards and motors:")
     configured = next((s for s in reversed(sessions) if s.boards or s.config), latest)
@@ -389,42 +468,31 @@ def main(argv=None):
             report("      {} at {} microsteps".format(motor, steps))
 
     report("")
-    found = None
-    for session in reversed(sessions):
-        span = last_print(session)
-        if span:
-            found = session, span
-            break
+    found = result.last_print
     if found:
-        session, (start, end) = found
-        stats = session.stats[start:end]
-        ended = next((text for i, kind, text in session.events if i == end and kind in ("print_end", "shutdown")),
-                     "still running when the log ends")
-        if ended.startswith("Finished"):
-            ended = "finished"
-        elif not ended.startswith("still"):
-            ended = "Klipper shut down: " + ended.splitlines()[0]
-        report("Last print: started {}, {:.0f} min of Stats, {}.".format(
-            session.wall(stats[0][0]) if stats else "?", (stats[-1][0] - stats[0][0]) / 60.0 if stats else 0,
-            ended))
-        describe(summarize(stats, session), session, report)
+        session = found["session"]
+        summary = summarize(print_stats(paths, found), session)
+        ended = found["ended"] or "no finish line yet (still running, or cancelled)"
+        length = summary["seconds"]
+        report("Last print: started {}, {} of Stats, {}.".format(
+            session.wall(summary["first"]) if summary["first"] is not None else "?",
+            "{:.0f} min".format(length / 60.0) if length >= 120 else "{:.0f} s".format(length), ended))
+        describe(summary, session, report)
     else:
-        report("No print in this log. Busiest stretch of Stats instead:")
-        describe(summarize(latest.stats, latest), latest, report)
+        report("No print in {}. The last {} s of Stats instead:".format(
+            "these logs" if len(paths) > 1 else "this log", len(result.tail)))
+        describe(summarize((e for e in (parse_entry(r) for r in result.tail) if e), latest), latest, report)
 
-    shutdowns = [(session, i, text) for session in sessions for i, kind, text in session.events
-                 if kind == "shutdown"]
+    shutdowns = [(session, event) for session in sessions for event in session.events if event[0] == "shutdown"]
     report("")
     if not shutdowns:
-        report("No shutdowns in this log." + ("" if args.all else " (--all reads the older days too.)"))
+        report("No shutdowns in {}.".format("these logs" if len(paths) > 1 else "this log")
+               + ("" if args.all else " (--all reads the older days too.)"))
         return 0
     report("Shutdowns ({}, the last 5 shown):".format(len(shutdowns)))
-    for session, index, text in shutdowns[-5:]:
-        before = [entry for entry in session.stats[:index]
-                  if session.stats[index - 1][0] - entry[0] <= LOOKBACK] if index else []
-        when = session.wall(session.stats[index - 1][0]) if index else "at startup"
+    for session, (_, text, when, before) in shutdowns[-5:]:
         report("")
-        report("  {}: {}".format(when, text.splitlines()[0]))
+        report("  {}: {}".format(session.wall(when) if when is not None else "at startup", text.splitlines()[0]))
         for finding in explain(text, before, session):
             report("    - " + finding)
     return 0

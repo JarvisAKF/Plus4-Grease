@@ -1,7 +1,7 @@
 # Changelog
 
 ## Unreleased
-- New `tools/klipper_report.py`: reads `klippy.log` and reports each board's chip, motors and microsteps, how loaded the boards, their serial links and the Pi were during the last print, and for each shutdown what Klipper's statistics just before it point to. Read-only.
+- New `tools/klipper_report.py`: streams through `klippy.log` (a few MB of memory, low CPU priority) and reports each board's chip, motors and microsteps, how loaded the boards, their serial links and the Pi were during the last print, and for each shutdown what Klipper's statistics just before it point to. Read-only.
 
 ## 0.2.0
 - Z tilt and bed mesh travel between probe points at 300 mm/s instead of QIDI's 150, by changing `speed:` under `[z_tilt]` and `[bed_mesh]` in `printer.cfg` where it's still QIDI's 150. A full 9×9 mesh spends about 8 s less moving. Measured first with `tools/speed_test.py`: a Plus 4 ran X/Y up to 500 mm/s at 20000 mm/s² over the probing area with no lost steps. Uninstall puts 150 back.
