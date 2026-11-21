@@ -68,7 +68,7 @@ bash ~/plus4-grease/install.sh uninstall   # put QIDI's lines back
 
 Candidates, each needing a test on a Plus 4 before it ships:
 
-- Faster moves between probe points for Z tilt and bed mesh. QIDI uses 150 mm/s. The Plus 4's X/Y motors are open-loop, and the Plus 5 lost position when Valve Oil ran them at 565, so this needs measuring first.
+- Faster moves between probe points for Z tilt and bed mesh. QIDI uses 150 mm/s. The Plus 4's X/Y motors are open-loop, and the Plus 5 lost position when Valve Oil ran them at 565, so this needs measuring first: `python3 ~/plus4-grease/tools/speed_test.py` moves the toolhead at rising speeds and re-homes after each to find where steps start getting lost. It changes no files, and results go to `~/plus4-grease-speed-test-<date>.txt`; please share yours in an issue.
 - Saving the bed mesh without freezing Klipper for about two seconds, ported from Valve Oil.
 - Fixes for QIDI Box bugs on the Plus 4, such as its Box software looking for the filament list in the wrong folder (`/home/qidi`).
 
