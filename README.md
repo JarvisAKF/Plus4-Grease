@@ -15,7 +15,7 @@ Small, reversible improvements for the **QIDI Plus 4** on QIDI firmware **V2.1.1
 | Print start: no 1.6 s wait while clearing the Box runout flags | QIDI's `PRINT_START` waits 0.1 s after clearing each of 16 flags. Each save already finishes before the next command, so the waits are dead time. |
 | Bed mesh: 0.5 s instead of 5 s before saving a new mesh | QIDI's `G29` waits a fixed 5 s after measuring before it saves the mesh. Valve Oil made the same cut on the Max 4 and Plus 5. |
 
-That's version 0.1: the installer, with checks and backups, and two changes that trim waiting. More follows as each change is tested on a Plus 4. See [What's next](#whats-next).
+That's version 0.1: the installer, with checks and backups, and two changes that trim waiting. What's been tried on real printers is in [docs/testing.md](docs/testing.md). More follows as each change is tested on a Plus 4. See [What's next](#whats-next).
 
 ## How it stays safe
 
