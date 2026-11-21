@@ -14,6 +14,9 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command")
     run = sub.add_parser("install", help="apply the changes that fit this printer")
     run.add_argument("--dry-run", action="store_true", help="show what would change; change nothing")
+    run.add_argument("--replace-own-speeds", action="store_true",
+                     help="also set the Z tilt and bed mesh speeds where you've set them yourself; "
+                          "uninstall puts yours back")
     run.add_argument("--any-firmware", action="store_true", help=argparse.SUPPRESS)
     sub.add_parser("uninstall", help="put QIDI's stock text back")
     sub.add_parser("status", help="show what's applied")
@@ -35,7 +38,7 @@ def main(argv=None):
         report("Reading the firmware version (sudo asks for the mks password)...")
         check_printer(paths, read_soc_version(), any_firmware=getattr(args, "any_firmware", False))
         if args.command == "install":
-            return install(paths, Klipper(), report, dry_run=args.dry_run)
+            return install(paths, Klipper(), report, dry_run=args.dry_run, replace_own=args.replace_own_speeds)
         return uninstall(paths, Klipper(), report)
     except GreaseError as error:
         report("Stopped: {}".format(error))

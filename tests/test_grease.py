@@ -32,9 +32,13 @@ def by_id(feature_id):
 
 
 class FakeKlipper(object):
-    def __init__(self, ready=True):
+    def __init__(self, ready=True, loaded=None):
         self.ready = ready
         self.restarts = 0
+        self.loaded = loaded
+
+    def settings(self):
+        return self.loaded
 
     def require_idle(self):
         pass
@@ -197,6 +201,59 @@ class InstallTests(unittest.TestCase):
         core.install(self.printer.paths, FakeKlipper(), self.printer.report)
         self.assertEqual(sorted(core.load_state(self.printer.paths)["applied"]), sorted(f.id for f in FEATURES))
         self.assertIn("speed: 300\n", self.printer.text("printer.cfg"))
+
+    def write_printer_cfg(self, text):
+        with open(self.printer.paths.config_file("printer.cfg"), "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+
+    def test_own_speed_needs_the_switch_and_comes_back_on_uninstall(self):
+        own = stock_text("printer.cfg").replace("[bed_mesh]\nspeed:150\n", "[bed_mesh]\nspeed: 200  # mine\n")
+        self.write_printer_cfg(own)
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, dry_run=True)
+        self.assertTrue(any("--replace-own-speeds" in line for line in self.printer.lines))
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report)
+        self.assertNotIn("bed_mesh_probe_moves", core.load_state(self.printer.paths)["applied"])
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, replace_own=True)
+        state = core.load_state(self.printer.paths)
+        self.assertIn("bed_mesh_probe_moves", state["applied"])
+        self.assertEqual(state["own_values"]["bed_mesh_probe_moves"]["was"], "speed: 200  # mine under [bed_mesh]")
+        self.assertIn("[bed_mesh]\nspeed: 300  # mine\n", self.printer.text("printer.cfg"))
+        self.printer.lines = []
+        core.status(self.printer.paths, self.printer.report)
+        self.assertTrue(any("replacing your speed: 200" in line for line in self.printer.lines))
+        core.uninstall(self.printer.paths, FakeKlipper(), self.printer.report)
+        self.assertEqual(self.printer.text("printer.cfg"), own)
+        self.assertNotIn("own_values", core.load_state(self.printer.paths))
+
+    def test_missing_speed_line_is_added_and_taken_out_again(self):
+        own = stock_text("printer.cfg").replace("[z_tilt]\n", "[z_tilt]\n", 1).replace(
+            "\nspeed: 150\nhorizontal_move_z: 5\n", "\nhorizontal_move_z: 5\n")
+        self.write_printer_cfg(own)
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, replace_own=True)
+        self.assertIn("[z_tilt]\nspeed: 300\nz_positions:\n", self.printer.text("printer.cfg"))
+        core.uninstall(self.printer.paths, FakeKlipper(), self.printer.report)
+        self.assertEqual(self.printer.text("printer.cfg"), own)
+
+    def test_section_twice_is_left_alone_even_with_the_switch(self):
+        own = stock_text("printer.cfg").replace("[bed_mesh]\nspeed:150\n", "[bed_mesh]\nspeed: 200\n") \
+            + "\n[bed_mesh]\nspeed: 250\n"
+        self.write_printer_cfg(own)
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, replace_own=True)
+        self.assertNotIn("bed_mesh_probe_moves", core.load_state(self.printer.paths)["applied"])
+        self.assertIn("[bed_mesh]\nspeed: 200\n", self.printer.text("printer.cfg"))
+
+    def test_own_speed_already_300_is_left_alone(self):
+        self.write_printer_cfg(stock_text("printer.cfg").replace("[bed_mesh]\nspeed:150\n", "[bed_mesh]\nspeed: 300.0\n"))
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, replace_own=True)
+        self.assertNotIn("bed_mesh_probe_moves", core.load_state(self.printer.paths)["applied"])
+        self.assertTrue(any("already has 300" in line for line in self.printer.lines))
+
+    def test_says_so_when_klipper_loaded_another_value(self):
+        loaded = {"z_tilt": {"speed": 300.0}, "bed_mesh": {"speed": 150.0}}
+        core.install(self.printer.paths, FakeKlipper(loaded=loaded), self.printer.report)
+        self.assertTrue(any("Klipper is using speed = 300 under [z_tilt]" in line for line in self.printer.lines))
+        self.assertTrue(any("Note: Klipper is using speed = 150.0 under [bed_mesh], not 300" in line
+                            for line in self.printer.lines))
 
     def test_beacon_printer_with_its_own_bed_mesh_gets_the_rest(self):
         path = self.printer.paths.config_file("printer.cfg")

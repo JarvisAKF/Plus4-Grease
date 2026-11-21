@@ -30,6 +30,13 @@ class Klipper(object):
         except Exception:  # noqa: BLE001 - Moonraker or Klipper not answering yet
             return "unknown"
 
+    def settings(self):
+        """The config Klipper loaded at its last start, section by section, or None if unreachable."""
+        try:
+            return self._get("/printer/objects/query?configfile=settings")["status"]["configfile"]["settings"]
+        except Exception:  # noqa: BLE001
+            return None
+
     def require_idle(self):
         try:
             job = self._get("/printer/objects/query?print_stats=state")["status"]["print_stats"]["state"]

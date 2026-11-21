@@ -13,7 +13,10 @@ under 2 s more.
 import collections
 
 Edit = collections.namedtuple("Edit", "file find replace")
-Feature = collections.namedtuple("Feature", "id title detail source edits")
+# setting: the one option a feature sets, for printers where someone set it by hand (install
+# --replace-own-speeds). None for features that only make their exact text edits.
+Feature = collections.namedtuple("Feature", "id title detail source edits setting", defaults=(None,))
+Setting = collections.namedtuple("Setting", "file section option value")
 
 PROBE_MOVE_SPEED = 300
 
@@ -114,6 +117,7 @@ FEATURES = (
                 ).format(PROBE_MOVE_SPEED),
             ),
         ),
+        setting=Setting("printer.cfg", "z_tilt", "speed", PROBE_MOVE_SPEED),
     ),
     Feature(
         id="bed_mesh_probe_moves",
@@ -143,5 +147,6 @@ FEATURES = (
                 ).format(PROBE_MOVE_SPEED),
             ),
         ),
+        setting=Setting("printer.cfg", "bed_mesh", "speed", PROBE_MOVE_SPEED),
     ),
 )

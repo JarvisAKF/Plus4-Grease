@@ -17,7 +17,9 @@ Small, reversible improvements for the **QIDI Plus 4** on QIDI firmware **V2.1.1
 | Z tilt: 300 mm/s instead of 150 between probe points | Each 255 mm trip between `Z_TILT_ADJUST`'s two points takes about 0.9 s instead of 1.7 s. Only the travel changes, not the probing. |
 | Bed mesh: 300 mm/s instead of 150 between probe points | A full 9×9 mesh spends about 8 s less moving; adaptive meshes save in proportion. With a Beacon it's also the scan speed. Only the travel changes, not the probing. |
 
-The two speed changes are in `printer.cfg` (`speed:` under `[z_tilt]` and `[bed_mesh]`). The Plus 4's X/Y motors are open-loop, and Valve Oil's Plus 5 lost position at 565 mm/s, so this was measured first: on a tested Plus 4, `tools/speed_test.py` ran X/Y up to 500 mm/s at the full 20000 mm/s² over the probing area with no lost steps. 300 leaves room for printers that haven't been tested; faster would save under 2 s more per full mesh. A speed you've set yourself is left alone.
+The two speed changes are in `printer.cfg` (`speed:` under `[z_tilt]` and `[bed_mesh]`). The Plus 4's X/Y motors are open-loop, and Valve Oil's Plus 5 lost position at 565 mm/s, so this was measured first: on a tested Plus 4, `tools/speed_test.py` ran X/Y up to 500 mm/s at the full 20000 mm/s² over the probing area with no lost steps. 300 leaves room for printers that haven't been tested; faster would save under 2 s more per full mesh.
+
+A speed you've set yourself is left alone unless you ask: `install --replace-own-speeds` sets it to 300 too, keeps a note of yours, and `uninstall` puts yours back. After the restart, install checks that Klipper really loaded 300, since another included file can set the same speed again.
 
 That's version 0.2: the installer, with checks and backups, two changes that trim waiting, and two that speed up probing. What's been tried on real printers is in [docs/testing.md](docs/testing.md). More follows as each change is tested on a Plus 4. See [What's next](#whats-next).
 
@@ -51,7 +53,7 @@ You need SSH access to the printer as `mks`. QIDI's default password is `makerba
 ```
 bash ~/plus4-grease/install.sh install --dry-run
 ```
-It asks for the `mks` password once, to read QIDI's firmware version, which is only readable with `sudo`. Each change is listed as `available`, `applied`, or `skipped`.
+It asks for the `mks` password once, to read QIDI's firmware version, which is only readable with `sudo`. Each change is listed as `available`, `applied`, or `skipped`, and a skipped speed change says what your `printer.cfg` has instead.
 
 **3. Install:**
 ```
