@@ -92,7 +92,7 @@ class Session(object):
         """'15:40:07' for a Stats eventtime, from the start line's clock and monotonic time."""
         if self.epoch is None or self.mono is None:
             return "t={:.0f}".format(eventtime)
-        return time.strftime("%H:%M:%S", time.localtime(self.epoch + eventtime - self.mono))
+        return time.strftime("%b %d %H:%M:%S %Z", time.localtime(self.epoch + eventtime - self.mono))
 
     def motors(self):
         """board -> [(stepper, microsteps)] from the config Klipper logged."""
@@ -259,7 +259,8 @@ def print_stats(paths, last_print):
 # ------------------------------------------------------------------ figures
 def summarize(stats, session):
     """Peak figures over Stats entries, in one pass, so it works on a generator of any length."""
-    out = {"seconds": 0.0, "first": None, "cpu_max": None, "cpu_avg": None, "sysload": None, "memavail": None,
+    out = {"seconds": 0.0, "first": None, "cpu_max": None, "cpu_avg": None, "cpu_at": None, "cpu_busy": 0,
+           "sysload": None, "memavail": None,
            "stall": 0.0, "stall_at": None, "buffer_min": None, "print_stalls": 0, "boards": {}}
     cpu_max, cpu_time, cpu_span = None, 0.0, 0.0
     stall_first = stall_last = None
@@ -290,13 +291,17 @@ def summarize(stats, session):
             if dt > 0:
                 if dt <= 1.5 and "cputime" in g0 and "cputime" in g1:
                     used = g1["cputime"] - g0["cputime"]
-                    cpu_max = used / dt if cpu_max is None else max(cpu_max, used / dt)
+                    if cpu_max is None or used / dt > cpu_max:
+                        cpu_max, out["cpu_at"] = used / dt, t1
+                    out["cpu_busy"] += 1 if used / dt >= 0.8 else 0
                     cpu_time, cpu_span = cpu_time + used, cpu_span + dt
                 # Stats come every second while Klipper is busy or hot. A longer gap after a line that still
                 # had moves queued means Klipper's main loop didn't get to run.
                 if 1.5 < dt < 120 and g0.get("buffer_time", 0) > 0 and dt - 1.0 > out["stall"]:
                     out["stall"], out["stall_at"] = dt - 1.0, t0
-                if g1.get("print_time", 0) > g0.get("print_time", 0) and "buffer_time" in g1:
+                # Homing and probing run one move at a time ("drip" mode), and Klipper reports 0 queued
+                # then; print_stall counts the times the queue really ran dry.
+                if g1.get("print_time", 0) > g0.get("print_time", 0) and g1.get("buffer_time", 0) > 0:
                     low = g1["buffer_time"]
                     out["buffer_min"] = low if out["buffer_min"] is None else min(out["buffer_min"], low)
                 for name, b in b1.items():
@@ -328,9 +333,10 @@ def level(value, busy, high):
 
 def describe(summary, session, report, indent="  "):
     if summary["cpu_max"] is not None:
-        report("{}Pi: Klipper used up to {:.0f}% of a CPU core ({:.0f}% on average); system load up to {:.2f} "
-               "on {} cores; memory free down to {:.0f} MB.".format(
-                   indent, summary["cpu_max"], summary["cpu_avg"], summary["sysload"] or 0, CORES,
+        report("{}Pi: Klipper used up to {:.0f}% of a CPU core at {} ({:.0f}% on average, {} second{} at 80% or "
+               "more); system load up to {:.2f} on {} cores; memory free down to {:.0f} MB.".format(
+                   indent, summary["cpu_max"], session.wall(summary["cpu_at"]), summary["cpu_avg"],
+                   summary["cpu_busy"], "" if summary["cpu_busy"] == 1 else "s", summary["sysload"] or 0, CORES,
                    summary["memavail"] or 0))
     if summary["stall"] >= 0.5:
         report("{}Klipper's main loop stopped for about {:.1f} s at {} with moves queued.".format(
@@ -338,12 +344,13 @@ def describe(summary, session, report, indent="  "):
     else:
         report("{}Klipper's main loop never stopped with moves queued.".format(indent))
     if summary["buffer_min"] is not None:
-        report("{}Moves queued ahead of the motors: never under {:.2f} s{}.".format(
-            indent, summary["buffer_min"],
-            " (it ran nearly dry)" if summary["buffer_min"] < 0.1 else ""))
+        report("{}Moves queued ahead of the motors, outside homing and probing: never under {:.2f} s.".format(
+            indent, summary["buffer_min"]))
     if summary["print_stalls"]:
-        report("{}The move queue ran dry {} times (print_stall): the Pi didn't send moves fast enough.".format(
-            indent, summary["print_stalls"]))
+        report("{}The move queue ran dry {} time{} (print_stall): the Pi didn't send moves fast enough.".format(
+            indent, summary["print_stalls"], "" if summary["print_stalls"] == 1 else "s"))
+    else:
+        report("{}The move queue never ran dry (print_stall stayed the same).".format(indent))
     for name in sorted(summary["boards"]):
         b = summary["boards"][name]
         chip = session.boards.get(name, {}).get("MCU", "")
@@ -372,8 +379,9 @@ def explain(message, before, session):
         host_busy.append("the Pi's load was {:.2f} on {} cores".format(s["sysload"], CORES))
     if s["memavail"] is not None and s["memavail"] < 50:
         host_busy.append("only {:.0f} MB of memory was free".format(s["memavail"]))
-    if s["buffer_min"] is not None and s["buffer_min"] < 0.1:
-        host_busy.append("the moves queued ahead of the motors fell to {:.2f} s".format(s["buffer_min"]))
+    if s["print_stalls"]:
+        host_busy.append("the move queue ran dry {} time{}".format(
+            s["print_stalls"], "" if s["print_stalls"] == 1 else "s"))
     link_trouble = ["board '{}' resent {} bytes and got {} bad ones".format(n, b["retransmit"], b["invalid"])
                     for n, b in sorted(s["boards"].items()) if b["retransmit"] or b["invalid"]]
     loaded = ["board '{}' was busy {:.0f}% of the time".format(n, b["awake"])
@@ -403,9 +411,11 @@ def explain(message, before, session):
             findings.append("A board was heavily loaded: " + "; ".join(loaded) + (
                 ". Board '{}' drives {}.".format(board, motor_text) if motor_text else "."))
         if "Lost communication" in message and not (host_busy or link_trouble):
-            findings.append("Board '{}' stopped answering without link errors or a stalled Pi before it: "
-                            "most likely its power, its cable coming loose, or the board resetting."
-                            .format(board))
+            usb = board and "SERIAL_BAUD" not in session.boards.get(board, {})
+            findings.append("Board '{}' stopped answering without link errors or a stalled Pi before it: most "
+                            "likely {}.".format(board, "its USB connection dropped (cable or plug, the board "
+                            "losing power or being switched off, or the board resetting)" if usb else
+                            "its power, its cable coming loose, or the board resetting"))
         if not findings:
             findings.append("Nothing in Klipper's statistics points to the Pi, the link, or the board being "
                             "overloaded. Something sent a command too late without leaving a trace in the "
