@@ -30,6 +30,8 @@ import sys
 import time
 
 LOG = "~/printer_data/logs/klippy.log"
+USB_LOG = "plus4-grease-usb.log"   # Plus4 Grease's USB event log, next to klippy.log
+USB_BEFORE, USB_AFTER = 60.0, 10.0  # seconds around a shutdown to show USB events from
 STATS_INTERVAL = 5.0      # a board sends its load figures every 5 s
 TASK_MAX = 0.0025         # graphstats.py's full scale for a board's task time
 LOOKBACK = 30.0           # seconds of Stats read before a shutdown
@@ -402,10 +404,58 @@ def describe(summary, session, report, indent="  "):
                                       b["invalid"]))
 
 
+# ------------------------------------------------------------------ USB events
+UsbEvent = collections.namedtuple("UsbEvent", "epoch stamp action port ids name")
+
+
+def read_usb_log(path):
+    """Plus4 Grease's USB event log: [UsbEvent], oldest first. A disconnect line has no name, so it gets
+    the name from the last connect on the same port with the same IDs."""
+    events, names = [], {}
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                parts = line.rstrip("\n").split(" ", 5)
+                if len(parts) < 5:
+                    continue
+                try:
+                    epoch = float(parts[1])
+                except ValueError:
+                    continue
+                name = parts[5] if len(parts) > 5 and parts[5] != "-" else ""
+                key = (parts[3], parts[4])
+                if parts[2] == "add" and name:
+                    names[key] = name
+                events.append(UsbEvent(epoch, parts[0], parts[2], parts[3], parts[4], name or names.get(key, "")))
+    except OSError:
+        return None
+    return events
+
+
+def usb_around(events, session, when):
+    """(covered, events near it): covered when the log was already running before this moment."""
+    if events is None or when is None or session.epoch is None:
+        return False, []
+    moment = session.epoch + when - session.mono
+    covered = bool(events) and events[0].epoch <= moment
+    near = [e for e in events if moment - USB_BEFORE <= e.epoch <= moment + USB_AFTER and e.action != "start"]
+    return covered, [(e, e.epoch - moment) for e in near]
+
+
+def usb_text(event, offset=None):
+    what = {"add": "connected", "remove": "disconnected"}.get(event.action, event.action)
+    timing = ""
+    if offset is not None:
+        timing = " ({:.1f} s {} the last Stats line)".format(abs(offset), "before" if offset <= 0 else "after")
+    return "{} {} on USB port {}{}".format(event.name or "a USB device ({})".format(event.ids), what,
+                                           event.port, timing)
+
+
 # ------------------------------------------------------------------ shutdowns
-def explain(message, before, session):
-    """Plain findings for one shutdown, from the Stats lines just before it."""
+def explain(message, before, session, usb=(False, [])):
+    """Plain findings for one shutdown, from the Stats lines just before it and the USB events around it."""
     s = summarize(before, session)
+    covered, near = usb
     named = NAMED_MCU.search(message)
     board = named.group(1) if named else None
     findings = []
@@ -450,11 +500,20 @@ def explain(message, before, session):
         if loaded:
             findings.append("A board was heavily loaded: " + "; ".join(loaded) + (
                 ". Board '{}' drives {}.".format(board, motor_text) if motor_text else "."))
-        if "Lost communication" in message and not (host_busy or link_trouble):
-            usb = board and "SERIAL_BAUD" not in session.boards.get(board, {})
+        usb_board = board and "SERIAL_BAUD" not in session.boards.get(board, {})
+        removed = [(e, dt) for e, dt in near if e.action == "remove"]
+        if "Lost communication" in message and usb_board and removed:
+            findings.insert(0, "Linux saw a USB disconnect just before: " + "; ".join(
+                usb_text(e, dt) for e, dt in removed) + ". The board was switched off, unplugged, lost power, "
+                "or reset; Klipper then lost it.")
+        elif "Lost communication" in message and usb_board and covered and not (host_busy or link_trouble):
+            findings.append("Board '{}' stopped answering, but Linux saw no USB device disconnect around it, "
+                            "so it stayed connected to the Pi: the board itself stopped responding (a firmware "
+                            "fault or a hang) rather than being switched off or unplugged.".format(board))
+        elif "Lost communication" in message and not (host_busy or link_trouble):
             findings.append("Board '{}' stopped answering without link errors or a stalled Pi before it: most "
                             "likely {}.".format(board, "its USB connection dropped (cable or plug, the board "
-                            "losing power or being switched off, or the board resetting)" if usb else
+                            "losing power or being switched off, or the board resetting)" if usb_board else
                             "its power, its cable coming loose, or the board resetting"))
         if not findings:
             findings.append("Nothing in Klipper's statistics points to the Pi, the link, or the board being "
@@ -546,6 +605,17 @@ def main(argv=None):
             "these logs" if len(paths) > 1 else "this log", len(result.tail)))
         describe(summarize((e for e in (parse_entry(r) for r in result.tail) if e), latest), latest, report)
 
+    usb_events = read_usb_log(os.path.join(os.path.dirname(paths[-1]), USB_LOG))
+    report("")
+    if usb_events is None:
+        report("No USB event log yet (Plus4 Grease's install adds it), so USB disconnects can't be matched.")
+    else:
+        shown = [e for e in usb_events if e.action != "start"][-5:]
+        report("USB events: {} in {}{}".format(
+            len([e for e in usb_events if e.action != "start"]), USB_LOG, ", the last 5:" if shown else "."))
+        for event in shown:
+            report("  {} UTC: {}".format(event.stamp.replace("T", " ").rstrip("Z")[:19], usb_text(event)))
+
     shutdowns = [(session, event) for session in sessions for event in session.events if event[0] == "shutdown"]
     report("")
     if not shutdowns:
@@ -556,8 +626,12 @@ def main(argv=None):
     for session, (_, text, when, before) in shutdowns[-5:]:
         report("")
         report("  {}: {}".format(session.wall(when) if when is not None else "at startup", text.splitlines()[0]))
-        for finding in explain(text, before, session):
+        usb = usb_around(usb_events, session, when)
+        for finding in explain(text, before, session, usb):
             report("    - " + finding)
+        others = [(e, dt) for e, dt in usb[1] if not (e.action == "remove" and "Lost communication" in text)]
+        for event, offset in others:
+            report("    - USB: " + usb_text(event, offset))
     return 0
 
 

@@ -102,6 +102,22 @@ class Log(object):
             os.unlink(path)
         return buffer.getvalue()
 
+    def run_with_usb(self, usb_lines, *args):
+        folder = tempfile.mkdtemp()
+        try:
+            path = self.write(os.path.join(folder, "klippy.log"))
+            if usb_lines is not None:
+                with open(os.path.join(folder, "plus4-grease-usb.log"), "w") as out:
+                    out.write("\n".join(usb_lines) + "\n")
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                klipper_report.main([path] + list(args))
+            return buffer.getvalue()
+        finally:
+            for name in os.listdir(folder):
+                os.unlink(os.path.join(folder, name))
+            os.rmdir(folder)
+
     def scan(self):
         handle, path = tempfile.mkstemp(suffix=".log")
         os.close(handle)
@@ -229,6 +245,41 @@ class ReportTests(unittest.TestCase):
         out = log.stats(20).add("Transition to shutdown state: Lost communication with MCU 'mcu_box1'").run()
         self.assertIn("its USB connection dropped", out)
         self.assertIn("Nov 21 ", out)
+
+    def box_log(self):
+        log = Log()
+        log.lines.append("MCU 'mcu_box1' config: MCU=stm32f401xc CLOCK_FREQ=84000000")
+        # Start line: epoch 1795297200.0 at monotonic 1000.0; 20 Stats lines end at t=1030, epoch 1795297230.
+        return log.stats(20).add("Transition to shutdown state: Lost communication with MCU 'mcu_box1'")
+
+    START_LINE = "2026-11-21T00:00:00.000Z 1795290000.000 start - - Plus4 Grease USB log installed"
+
+    def test_box_switched_off_shows_the_usb_disconnect(self):
+        out = self.box_log().run_with_usb([
+            self.START_LINE,
+            "2026-11-21T00:01:00.000Z 1795290060.000 add 2-1.2.1.2 1d50/614e/100 Klipper QIDI_BOX_V1",
+            "2026-11-21T15:40:29.400Z 1795297229.400 remove 2-1.2.1.2 1d50/614e/100 -",
+        ])
+        self.assertIn("Linux saw a USB disconnect just before: Klipper QIDI_BOX_V1 disconnected on USB port "
+                      "2-1.2.1.2 (0.6 s before the last Stats line). The board was switched off, unplugged, "
+                      "lost power, or reset", out)
+        self.assertNotIn("most likely its USB connection dropped", out)
+        self.assertIn("USB events: 2 in plus4-grease-usb.log, the last 5:", out)
+
+    def test_box_stopped_answering_without_leaving_usb(self):
+        out = self.box_log().run_with_usb([self.START_LINE])
+        self.assertIn("Linux saw no USB device disconnect around it, so it stayed connected to the Pi", out)
+
+    def test_without_the_usb_log(self):
+        out = self.box_log().run_with_usb(None)
+        self.assertIn("No USB event log yet", out)
+        self.assertIn("most likely its USB connection dropped", out)
+
+    def test_usb_log_started_after_the_shutdown_proves_nothing(self):
+        late = "2026-11-22T00:00:00.000Z 1795400000.000 start - - Plus4 Grease USB log installed"
+        out = self.box_log().run_with_usb([late])
+        self.assertIn("most likely its USB connection dropped", out)
+        self.assertNotIn("Linux saw no USB device disconnect", out)
 
     def test_low_memory_and_a_dry_queue(self):
         out = Log().stats(20, buffer=0.05, mem=30000).add(

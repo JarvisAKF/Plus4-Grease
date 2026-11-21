@@ -16,12 +16,13 @@ Small, reversible improvements for the **QIDI Plus 4** on QIDI firmware **V2.1.1
 | Bed mesh: 0.5 s instead of 5 s before saving a new mesh | QIDI's `G29` waits a fixed 5 s after measuring before it saves the mesh. Valve Oil made the same cut on the Max 4 and Plus 5. |
 | Z tilt: 300 mm/s instead of 150 between probe points | Each 255 mm trip between `Z_TILT_ADJUST`'s two points takes about 0.9 s instead of 1.7 s. Only the travel changes, not the probing. |
 | Bed mesh: 300 mm/s instead of 150 between probe points | A full 9×9 mesh spends about 8 s less moving; adaptive meshes save in proportion. With a Beacon it's also the scan speed. Only the travel changes, not the probing. |
+| USB event log | A line in `~/printer_data/logs/plus4-grease-usb.log` each time a USB device (the Box, a Beacon, a board) connects or disconnects, kept on the eMMC. The Plus 4 keeps Linux's own logs in RAM, so switching the printer off loses them. `tools/klipper_report.py` uses it to tell "Lost communication" from a Box switched off or unplugged. No serial numbers are written. |
 
 The two speed changes are in `printer.cfg` (`speed:` under `[z_tilt]` and `[bed_mesh]`). The Plus 4's X/Y motors are open-loop, and Valve Oil's Plus 5 lost position at 565 mm/s, so this was measured first: on a tested Plus 4, `tools/speed_test.py` ran X/Y up to 500 mm/s at the full 20000 mm/s² over the probing area with no lost steps. 300 leaves room for printers that haven't been tested; faster would save under 2 s more per full mesh.
 
 A speed you've set yourself is left alone unless you ask: `install --replace-own-speeds` sets it to 300 too, keeps a note of yours, and `uninstall` puts yours back. After the restart, install checks that Klipper really loaded 300, since another included file can set the same speed again.
 
-That's version 0.2: the installer, with checks and backups, two changes that trim waiting, and two that speed up probing. What's been tried on real printers is in [docs/testing.md](docs/testing.md). More follows as each change is tested on a Plus 4. See [What's next](#whats-next).
+That's version 0.3: the installer, with checks and backups, two changes that trim waiting, two that speed up probing, and the USB event log. What's been tried on real printers is in [docs/testing.md](docs/testing.md). More follows as each change is tested on a Plus 4. See [What's next](#whats-next).
 
 ## How it stays safe
 
@@ -29,6 +30,7 @@ That's version 0.2: the installer, with checks and backups, two changes that tri
 - **Backups first.** Every file it changes is copied to `~/.plus4-grease/backups/` first.
 - **Klipper has to start.** After a change it restarts Klipper. If Klipper doesn't come back ready, it puts your files back by itself.
 - **Clean uninstall.** `uninstall` puts QIDI's lines back.
+- **One system file pair, nothing else.** The USB event log is the only part outside Klipper's config: a udev rule in `/etc/udev/rules.d/99-plus4-grease-usb.rules` and its script in `/usr/local/lib/plus4-grease/`, written with `sudo` and owned by root, since udev runs the script as root. `uninstall` removes both and leaves the log.
 - **It checks the printer.** It runs only on a Plus 4 (`/dev_info.txt` reads `QIDI@x-plus_4`) on firmware V2.1.1, as the `mks` user, and never while a print is running or paused.
 
 ## Install

@@ -7,7 +7,7 @@ import re
 import shutil
 import subprocess
 
-from . import VERSION
+from . import VERSION, system
 from .edits import FEATURES, Edit
 
 MODEL_FILE = "/dev_info.txt"
@@ -285,21 +285,49 @@ def check_loaded(klipper, features, report):
                    "change it there.".format(s.option, loaded, s.section, s.value, s.file))
 
 
-def install(paths, klipper, report, dry_run=False, replace_own=False):
+def report_usb(usb, report):
+    report("  {:9}  {}".format(usb, system.TITLE))
+    if usb == "skipped":
+        report("             Other files are where Plus4 Grease's would go ({}, {}), so this is left "
+               "alone.".format(system.RULE, system.SCRIPT))
+
+
+def mark_applied(paths, feature_id, on):
+    state = load_state(paths)
+    applied = set(state.get("applied", []))
+    applied = applied | {feature_id} if on else applied - {feature_id}
+    state["applied"], state["version"] = sorted(applied), VERSION
+    save_state(paths, state)
+
+
+def install(paths, klipper, report, dry_run=False, replace_own=False, runner=None, root=None):
     texts, rows = plan(paths, replace_own)
     todo = [row for row in rows if row.status == "available"]
+    usb = system.status(paths, root)
     for row in rows:
         report("  {:9}  {}".format(row.status, row.feature.title))
         if row.replacing:
             report("             Replacing your {}; uninstall puts it back.".format(row.note))
         elif row.status == "skipped":
             report("             " + skip_reason(row))
-    if not todo:
+    report_usb(usb, report)
+    if not todo and usb != "available":
         report("Nothing to change.")
         return 0
     if dry_run:
         report("Dry run: nothing was changed.")
         return 0
+    if todo:
+        klipper.require_idle()
+    if usb == "available":
+        try:
+            system.install(paths, report, runner)
+        except OSError as error:
+            raise GreaseError("The USB event log couldn't be installed: {}. Nothing else was changed.".format(error))
+        mark_applied(paths, "usb_event_log", True)
+        if not todo:
+            report("Done. Applied: usb_event_log.")
+            return 0
     klipper.require_idle()
     names = sorted({e.file for row in todo for e in row.feature.edits})
     folder = backup(paths, names)
@@ -325,24 +353,40 @@ def install(paths, klipper, report, dry_run=False, replace_own=False):
     if not klipper.restart_and_wait():
         report("Klipper didn't come back ready. Putting the files back...")
         restore(paths, folder, names)
+        if usb == "available":
+            system.uninstall(paths, report, runner)
+            state["applied"] = sorted(set(state.get("applied", [])) - {"usb_event_log"})
         save_state(paths, dict(state))
         klipper.restart_and_wait()
         raise GreaseError("Klipper didn't start with the changes, so they were taken out again. Nothing "
                           "is left changed. Please report this with ~/printer_data/logs/klippy.log.")
     check_loaded(klipper, [row.feature for row in todo], report)
-    report("Done. Applied: {}.".format(", ".join(row.feature.id for row in todo)))
+    report("Done. Applied: {}.".format(", ".join(
+        (["usb_event_log"] if usb == "available" else []) + [row.feature.id for row in todo])))
     return 0
 
 
-def uninstall(paths, klipper, report):
+def uninstall(paths, klipper, report, runner=None, root=None):
     texts, rows = plan(paths)
     state = load_state(paths)
     todo = [row.feature for row in rows if row.status == "applied"]
     for row in rows:
         if row.status == "skipped" and row.feature.id in state.get("applied", []):
             report("  left alone  {} (changed since install)".format(row.feature.title))
+    usb = system.status(paths, root)
+    if usb == "applied":
+        try:
+            system.uninstall(paths, report, runner)
+        except OSError as error:
+            raise GreaseError("The USB event log couldn't be removed: {}.".format(error))
+        report("  removed    {}".format(system.TITLE))
+        mark_applied(paths, "usb_event_log", False)
+        state = load_state(paths)
+    elif usb == "skipped" and "usb_event_log" in state.get("applied", []):
+        report("  left alone  {} (changed since install)".format(system.TITLE))
     if not todo:
-        report("Nothing of Plus4 Grease is applied.")
+        if usb != "applied":
+            report("Nothing of Plus4 Grease is applied.")
         save_state(paths, {"version": VERSION, "applied": []})
         return 0
     klipper.require_idle()
@@ -364,7 +408,7 @@ def uninstall(paths, klipper, report):
     return 0
 
 
-def status(paths, report):
+def status(paths, report, root=None):
     _, rows = plan(paths)
     state = load_state(paths)
     for row in rows:
@@ -376,4 +420,5 @@ def status(paths, report):
         elif row.status == "skipped":
             note = "\n             " + skip_reason(row)
         report("  {:9}  {}{}".format(row.status, row.feature.title, note))
+    report_usb(system.status(paths, root), report)
     return 0
