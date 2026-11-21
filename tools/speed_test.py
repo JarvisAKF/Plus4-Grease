@@ -6,7 +6,7 @@ Run on the printer as mks, with the bed clear:
     python3 ~/plus4-grease/tools/speed_test.py
 
 It homes, raises the bed clear of the nozzle, records where the X/Y motors think they are, then runs a
-pattern of moves across the bed at each speed in turn. After each speed it re-homes X and Y and compares:
+pattern of moves inside the bed mesh area (where probing goes) at each speed in turn. After each speed it re-homes X and Y and compares:
 a motor that lost steps reports a different position at the same endstop. It stops at the first speed
 that loses steps.
 
@@ -28,6 +28,11 @@ import urllib.request
 
 MOONRAKER = "http://127.0.0.1:7125"
 MARGIN = 20.0  # mm kept clear of each end of travel, by default
+# QIDI's no-print zones on the Plus 4 bed (its OrcaSlicer profile's bed_exclude_area): a strip at the back left,
+# X 0-35 and Y 302-305, and a block at the front right, X 293-305 and Y 0-20. Staying at or below these keeps the
+# nozzle out of both.
+MAX_X_OUTSIDE_FRONT_RIGHT = 292.0
+MAX_Y_OUTSIDE_BACK_LEFT = 301.0
 STEPPERS = ("stepper_x", "stepper_y")  # on CoreXY, the A and B motors
 
 
@@ -78,6 +83,27 @@ def pattern(xmin, xmax, ymin, ymax):
             (xmin, ymid), (xmin, ymin)]
 
 
+def pair(value):
+    """bed_mesh's mesh_min and mesh_max come back as '25,10' from older Klipper and [25.0, 10.0] from newer."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.split(",")
+    try:
+        x, y = (float(v) for v in value)
+    except (TypeError, ValueError):
+        return None
+    return x, y
+
+
+def probe_offset(settings):
+    for name in ("beacon", "probe", "smart_effector", "bltouch", "probe_eddy_current cartographer", "cartographer"):
+        section = settings.get(name)
+        if section and ("x_offset" in section or "y_offset" in section):
+            return float(section.get("x_offset", 0)), float(section.get("y_offset", 0)), "[{}]".format(name)
+    return 0.0, 0.0, "no probe"
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--speeds", default="150,200,250,300,350,400,450,500",
@@ -85,8 +111,11 @@ def main(argv=None):
     parser.add_argument("--accel", type=float, default=None,
                         help="mm/s^2 for the test moves (default: the printer's max_accel)")
     parser.add_argument("--repeats", type=int, default=5, help="times through the pattern at each speed")
+    parser.add_argument("--area", choices=("mesh", "travel"), default="mesh",
+                        help="mesh (default): stay inside the bed mesh area from the printer's config, where probing "
+                             "goes; travel: the travel limits minus --margin, which can reach no-print zones")
     parser.add_argument("--margin", type=float, default=MARGIN,
-                        help="mm to stay inside each end of travel (default %(default)s)")
+                        help="with --area travel, mm to stay inside each end of travel (default %(default)s)")
     parser.add_argument("--locate", action="store_true",
                         help="instead of rising speeds, run each edge and diagonal on its own at one gentle speed "
                              "and re-home after each, to find where steps get lost")
@@ -109,6 +138,22 @@ def main(argv=None):
               for name in STEPPERS}
     xmin, xmax = limits["stepper_x"][0] + args.margin, limits["stepper_x"][1] - args.margin
     ymin, ymax = limits["stepper_y"][0] + args.margin, limits["stepper_y"][1] - args.margin
+    if args.area == "mesh":
+        mesh = settings.get("bed_mesh", {})
+        low, high = pair(mesh.get("mesh_min")), pair(mesh.get("mesh_max"))
+        if not (low and high):
+            raise SystemExit("No [bed_mesh] mesh_min and mesh_max in the printer's config; use --area travel.")
+        # mesh_min and mesh_max are where the probe goes; the nozzle sits the probe's offset away from it.
+        dx, dy, probe_name = probe_offset(settings)
+        xmin, ymin = max(low[0] - dx, limits["stepper_x"][0]), max(low[1] - dy, limits["stepper_y"][0])
+        xmax, ymax = min(high[0] - dx, limits["stepper_x"][1]), min(high[1] - dy, limits["stepper_y"][1])
+        print("Bed mesh probe area X {:.0f}-{:.0f}, Y {:.0f}-{:.0f}; with the {} offset ({:+.1f}, {:+.1f}) the nozzle "
+              "stays in X {:.0f}-{:.0f}, Y {:.0f}-{:.0f}, where probing already takes it.".format(
+                  low[0], high[0], low[1], high[1], probe_name, dx, dy, xmin, xmax, ymin, ymax))
+    if xmax > MAX_X_OUTSIDE_FRONT_RIGHT or ymax > MAX_Y_OUTSIDE_BACK_LEFT:
+        print("Keeping out of QIDI's no-print zones (back left, front right): X up to {:.0f}, Y up to {:.0f}.".format(
+            MAX_X_OUTSIDE_FRONT_RIGHT, MAX_Y_OUTSIDE_BACK_LEFT))
+    xmax, ymax = min(xmax, MAX_X_OUTSIDE_FRONT_RIGHT), min(ymax, MAX_Y_OUTSIDE_BACK_LEFT)
     max_velocity = float(settings["printer"]["max_velocity"])
     accel = args.accel or float(settings["printer"]["max_accel"])
     microsteps = int(settings["stepper_x"]["microsteps"])
