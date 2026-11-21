@@ -199,8 +199,18 @@ class Scan(object):
                     current.boards[match.group(1)] = dict(
                         part.split("=", 1) for part in match.group(2).split() if "=" in part)
             elif line.startswith("Starting SD card print"):
-                self._close_print("a new print started before it finished", place=(index, offset - len(raw)))
-                self.last_print = {"session": current, "start": (index, offset), "end": None, "ended": None}
+                # virtual_sdcard logs this again on every resume after a pause, with the file position it
+                # goes on from. Only a start from position 0, or one in a new session, is a new print.
+                match = re.search(r"position (\d+)", line)
+                position = int(match.group(1)) if match else 0
+                running = (self.last_print and self.last_print["end"] is None
+                           and self.last_print["session"] is current)
+                if running and position > 0:
+                    self.last_print["resumes"] += 1
+                else:
+                    self._close_print("a new print started before it finished", place=(index, offset - len(raw)))
+                    self.last_print = {"session": current, "start": (index, offset), "end": None, "ended": None,
+                                       "resumes": 0, "position": position}
             elif line.startswith("Finished SD card print"):
                 if self.last_print and self.last_print["session"] is current:
                     self._close_print("finished")
@@ -237,6 +247,32 @@ def scan(paths, progress=None):
     return result
 
 
+def lines_near(paths, last_print, stretches, before=3.0, after=1.0, keep=14):
+    """The non-Stats lines Klipper logged during each stretch, by the time of the Stats line before them."""
+    found = [[] for _ in stretches]
+    (first_file, first_offset), end = last_print["start"], last_print["end"]
+    now = None
+    for index in range(first_file, len(paths)):
+        with open(paths[index], "rb") as handle:
+            offset = 0
+            if index == first_file:
+                handle.seek(first_offset)
+                offset = first_offset
+            for raw in iter(handle.readline, b""):
+                offset += len(raw)
+                if end is not None and (index, offset) > end:
+                    return found
+                if raw.startswith(b"Stats "):
+                    now = stats_time(raw) or now
+                    continue
+                if now is None or not raw.strip():
+                    continue
+                for n, (start, stop, _, _) in enumerate(stretches):
+                    if start - before <= now <= stop + after and len(found[n]) < keep:
+                        found[n].append(raw.decode("utf-8", "replace").rstrip()[:160])
+    return found
+
+
 def print_stats(paths, last_print):
     """Second pass: parse the Stats lines of the last print only, from where it started to where it ended."""
     (first_file, first_offset), end = last_print["start"], last_print["end"]
@@ -263,6 +299,7 @@ def summarize(stats, session):
            "sysload": None, "memavail": None,
            "stall": 0.0, "stall_at": None, "buffer_min": None, "print_stalls": 0, "boards": {}}
     cpu_max, cpu_time, cpu_span = None, 0.0, 0.0
+    out["stretches"] = []   # [start, end, seconds, peak] where Klipper used 80% of a core or more
     stall_first = stall_last = None
     prev = None
     for entry in stats:
@@ -293,7 +330,13 @@ def summarize(stats, session):
                     used = g1["cputime"] - g0["cputime"]
                     if cpu_max is None or used / dt > cpu_max:
                         cpu_max, out["cpu_at"] = used / dt, t1
-                    out["cpu_busy"] += 1 if used / dt >= 0.8 else 0
+                    if used / dt >= 0.8:
+                        out["cpu_busy"] += 1
+                        last = out["stretches"][-1] if out["stretches"] else None
+                        if last and t1 - last[1] <= 5.0:
+                            last[1], last[2], last[3] = t1, last[2] + 1, max(last[3], used / dt)
+                        else:
+                            out["stretches"].append([t0, t1, 1, used / dt])
                     cpu_time, cpu_span = cpu_time + used, cpu_span + dt
                 # Stats come every second while Klipper is busy or hot. A longer gap after a line that still
                 # had moves queued means Klipper's main loop didn't get to run.
@@ -343,9 +386,6 @@ def describe(summary, session, report, indent="  "):
             indent, summary["stall"], session.wall(summary["stall_at"])))
     else:
         report("{}Klipper's main loop never stopped with moves queued.".format(indent))
-    if summary["buffer_min"] is not None:
-        report("{}Moves queued ahead of the motors, outside homing and probing: never under {:.2f} s.".format(
-            indent, summary["buffer_min"]))
     if summary["print_stalls"]:
         report("{}The move queue ran dry {} time{} (print_stall): the Pi didn't send moves fast enough.".format(
             indent, summary["print_stalls"], "" if summary["print_stalls"] == 1 else "s"))
@@ -484,10 +524,23 @@ def main(argv=None):
         summary = summarize(print_stats(paths, found), session)
         ended = found["ended"] or "no finish line yet (still running, or cancelled)"
         length = summary["seconds"]
-        report("Last print: started {}, {} of Stats, {}.".format(
+        resumes = found.get("resumes", 0)
+        report("Last print: started {}{}, {} of Stats{}, {}.".format(
             session.wall(summary["first"]) if summary["first"] is not None else "?",
-            "{:.0f} min".format(length / 60.0) if length >= 120 else "{:.0f} s".format(length), ended))
+            " at file position {}".format(found["position"]) if found.get("position") else "",
+            "{:.0f} min".format(length / 60.0) if length >= 120 else "{:.0f} s".format(length),
+            ", resumed {} time{} after a pause".format(resumes, "" if resumes == 1 else "s") if resumes else "",
+            ended))
         describe(summary, session, report)
+        stretches = sorted(summary["stretches"], key=lambda s: -s[2])[:3]
+        if stretches:
+            report("")
+            report("  When Klipper used 80% of a core or more (longest first), and what it logged then:")
+            for (start, stop, seconds, peak), lines in zip(stretches, lines_near(paths, found, stretches)):
+                report("    {} to {}: {} s, peak {:.0f}%".format(
+                    session.wall(start), session.wall(stop)[-12:], seconds, 100.0 * peak))
+                for line in lines or ["(nothing logged)"]:
+                    report("        " + line)
     else:
         report("No print in {}. The last {} s of Stats instead:".format(
             "these logs" if len(paths) > 1 else "this log", len(result.tail)))

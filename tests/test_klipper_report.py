@@ -202,8 +202,20 @@ class ReportTests(unittest.TestCase):
     def test_homing_and_probing_dont_count_as_a_dry_queue(self):
         out = Log().add("Starting SD card print (position 0)").stats(5, buffer=0.0).stats(20).add(
             "Finished SD card print").run()
-        self.assertIn("outside homing and probing: never under 1.50 s", out)
         self.assertIn("never ran dry", out)
+
+    def test_a_resume_is_the_same_print(self):
+        log = Log().add("Starting SD card print (position 0)").stats(30).add("Starting SD card print (position 5123)")
+        out = log.stats(30).add("Finished SD card print").run()
+        self.assertIn("59 s of Stats, resumed 1 time after a pause, finished", out)
+
+    def test_busy_stretches_show_what_klipper_logged(self):
+        log = Log().add("Starting SD card print (position 0)").stats(20).add("bed_mesh: generated points")
+        log.stats(6, cpu=0.95).stats(20).add("Finished SD card print")
+        out = log.run()
+        self.assertIn("6 seconds at 80% or more", out)
+        self.assertIn(": 6 s, peak 95%", out)
+        self.assertIn("        bed_mesh: generated points", out)
 
     def test_a_real_dry_queue(self):
         log = Log().add("Starting SD card print (position 0)").stats(10)
@@ -222,7 +234,6 @@ class ReportTests(unittest.TestCase):
         out = Log().stats(20, buffer=0.05, mem=30000).add(
             "Transition to shutdown state: MCU 'U_1' shutdown: Timer too close").run()
         self.assertIn("only 29 MB of memory was free", out)
-        self.assertIn("never under 0.05 s", out)
 
     def test_a_new_days_file_continues_the_session(self):
         log = Log().stats(5).add("=============== Log rollover at Sun Nov 22 00:00:00 2026 ===============")
