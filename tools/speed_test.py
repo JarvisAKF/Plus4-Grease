@@ -49,16 +49,20 @@ def gcode(script, timeout=900):
 
 
 def mcu_positions():
-    """GET_POSITION's 'mcu:' line holds each motor's step count."""
+    """GET_POSITION's 'mcu:' line holds each motor's step count. Klipper sends all its lines as one
+    message, each starting with '// '."""
     since = time.time() - 1
     gcode("GET_POSITION")
     for _ in range(20):
         for entry in reversed(get("/server/gcode_store?count=40")["gcode_store"]):
-            if entry.get("time", 0) >= since and entry.get("message", "").startswith("mcu:"):
-                counts = dict(re.findall(r"(\w+):(-?\d+)", entry["message"]))
+            found = re.search(r"mcu: ([^\n]*)", entry.get("message", ""))
+            if found and entry.get("time", 0) >= since:
+                counts = dict(re.findall(r"(\w+):(-?\d+)", found.group(1)))
                 return {name: int(counts[name]) for name in STEPPERS}
         time.sleep(0.25)
-    raise SystemExit("Couldn't read GET_POSITION's output from Moonraker.")
+    recent = [entry.get("message", "")[:120] for entry in get("/server/gcode_store?count=5")["gcode_store"]]
+    raise SystemExit("Couldn't read GET_POSITION's output from Moonraker. Its last messages were:\n  "
+                     + "\n  ".join(recent))
 
 
 def rehome(park):
