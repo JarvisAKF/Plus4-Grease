@@ -4,11 +4,18 @@ Each edit names one block of QIDI's stock text and what replaces it. An edit app
 block is in the file exactly once, so a file someone changed by hand (a Beacon conversion, a community
 mod) is left alone instead of overwritten. Uninstall puts the stock block back only where the replacement
 is still there exactly once.
+
+PROBE_MOVE_SPEED is the Plus 4's speed for the X/Y moves between probe points. tools/speed_test.py ran a
+Plus 4's X/Y at up to 500 mm/s at its full 20000 mm/s^2 over the probing area with no lost steps (see
+docs/testing.md). 300 leaves room for printers that haven't been tested; above it a full 9x9 mesh saves
+under 2 s more.
 """
 import collections
 
 Edit = collections.namedtuple("Edit", "file find replace")
 Feature = collections.namedtuple("Feature", "id title detail source edits")
+
+PROBE_MOVE_SPEED = 300
 
 FEATURES = (
     Feature(
@@ -75,6 +82,65 @@ FEATURES = (
                     "            G4 P500\n"
                     "            SAVE_CONFIG_QD\n"
                 ),
+            ),
+        ),
+    ),
+    Feature(
+        id="z_tilt_probe_moves",
+        title="Z tilt: {} mm/s instead of 150 between probe points".format(PROBE_MOVE_SPEED),
+        detail=(
+            "Z_TILT_ADJUST travels the 255 mm between its two probe points at QIDI's 150 mm/s, up to three "
+            "rounds per print. At {} each trip takes about 0.9 s instead of 1.7 s. Only the travel between "
+            "points changes; the probing itself is the same.".format(PROBE_MOVE_SPEED)
+        ),
+        source=(
+            "Valve Oil raises the same speed on the Plus 5 (to 400 mm/s, after 565 made its open-loop X/Y "
+            "motors skip). The Plus 4 value comes from tools/speed_test.py."
+        ),
+        edits=(
+            Edit(
+                file="printer.cfg",
+                find=(
+                    "speed: 150\n"
+                    "horizontal_move_z: 5\n"
+                    "retries: 2\n"
+                    "retry_tolerance: 0.05\n"
+                ),
+                replace=(
+                    "speed: {}\n"
+                    "horizontal_move_z: 5\n"
+                    "retries: 2\n"
+                    "retry_tolerance: 0.05\n"
+                ).format(PROBE_MOVE_SPEED),
+            ),
+        ),
+    ),
+    Feature(
+        id="bed_mesh_probe_moves",
+        title="Bed mesh: {} mm/s instead of 150 between probe points".format(PROBE_MOVE_SPEED),
+        detail=(
+            "BED_MESH_CALIBRATE travels between probe points at QIDI's 150 mm/s. At {} a full 9x9 mesh spends "
+            "about 8 s less moving, and smaller adaptive meshes save in proportion. With a Beacon this is "
+            "also its scan speed. Only the travel between points changes; the probing itself is the "
+            "same.".format(PROBE_MOVE_SPEED)
+        ),
+        source=(
+            "Valve Oil raises the same speed on the Plus 5 (to 400 mm/s, after 565 made its open-loop X/Y "
+            "motors skip). The Plus 4 value comes from tools/speed_test.py."
+        ),
+        edits=(
+            Edit(
+                file="printer.cfg",
+                find=(
+                    "[bed_mesh]\n"
+                    "speed:150\n"
+                    "horizontal_move_z:5\n"
+                ),
+                replace=(
+                    "[bed_mesh]\n"
+                    "speed:{}\n"
+                    "horizontal_move_z:5\n"
+                ).format(PROBE_MOVE_SPEED),
             ),
         ),
     ),

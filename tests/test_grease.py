@@ -1,7 +1,7 @@
 """Tests for Plus4 Grease, run on a computer: python3 -m unittest discover -s tests -v
 
-They run each change against QIDI's stock 2.1.1 gcode_macro.cfg and against hand-changed copies, and run
-install and uninstall against a fake printer folder with a fake Klipper.
+They run each change against QIDI's stock 2.1.1 gcode_macro.cfg and printer.cfg and against hand-changed
+copies, and run install and uninstall against a fake printer folder with a fake Klipper.
 """
 import os
 import shutil
@@ -14,12 +14,21 @@ from grease.core import GreaseError, Paths
 from grease.edits import FEATURES
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-STOCK = os.path.join(HERE, "stock_gcode_macro_2.1.1.cfg")
+STOCK = {"gcode_macro.cfg": os.path.join(HERE, "stock_gcode_macro_2.1.1.cfg"),
+         "printer.cfg": os.path.join(HERE, "stock_printer_2.1.1.cfg")}
 
 
-def stock_text():
-    with open(STOCK, "r", encoding="utf-8", newline="") as handle:
+def stock_text(name="gcode_macro.cfg"):
+    with open(STOCK[name], "r", encoding="utf-8", newline="") as handle:
         return handle.read()
+
+
+def stock_texts():
+    return {name: stock_text(name) for name in STOCK}
+
+
+def by_id(feature_id):
+    return next(f for f in FEATURES if f.id == feature_id)
 
 
 class FakeKlipper(object):
@@ -48,13 +57,18 @@ class Printer(object):
         self.macro = self.paths.config_file("gcode_macro.cfg")
         with open(self.macro, "w", encoding="utf-8", newline="") as handle:
             handle.write(stock_text() if text is None else text)
+        with open(self.paths.config_file("printer.cfg"), "w", encoding="utf-8", newline="") as handle:
+            handle.write(stock_text("printer.cfg"))
         self.lines = []
 
     def report(self, line):
         self.lines.append(line)
 
     def macro_text(self):
-        with open(self.macro, "r", encoding="utf-8", newline="") as handle:
+        return self.text("gcode_macro.cfg")
+
+    def text(self, name):
+        with open(self.paths.config_file(name), "r", encoding="utf-8", newline="") as handle:
             return handle.read()
 
     def cleanup(self):
@@ -63,14 +77,14 @@ class Printer(object):
 
 class EditTests(unittest.TestCase):
     def test_every_stock_block_is_in_qidi_2_1_1_exactly_once(self):
-        text = stock_text()
+        texts = stock_texts()
         for feature in FEATURES:
             for edit in feature.edits:
-                self.assertEqual(text.count(edit.find), 1, feature.id)
-                self.assertEqual(text.count(edit.replace), 0, feature.id)
+                self.assertEqual(texts[edit.file].count(edit.find), 1, feature.id)
+                self.assertEqual(texts[edit.file].count(edit.replace), 0, feature.id)
 
-    def test_changes_only_trim_dwells(self):
-        texts = {"gcode_macro.cfg": stock_text()}
+    def test_macro_changes_only_trim_dwells(self):
+        texts = stock_texts()
         for feature in FEATURES:
             core.apply_feature(texts, feature)
         before, after = stock_text().splitlines(), texts["gcode_macro.cfg"].splitlines()
@@ -79,15 +93,42 @@ class EditTests(unittest.TestCase):
         self.assertEqual({line.strip() for line in removed}, {"G4 P100", "G4 P5000"})
         self.assertEqual({line.strip() for line in added}, {"G4 P500"})
 
-    def test_apply_then_revert_gives_back_qidis_file(self):
-        texts = {"gcode_macro.cfg": stock_text()}
+    def test_printer_cfg_changes_only_the_z_tilt_and_bed_mesh_speeds(self):
+        texts = stock_texts()
+        for feature in FEATURES:
+            core.apply_feature(texts, feature)
+        before, after = stock_text("printer.cfg").splitlines(), texts["printer.cfg"].splitlines()
+        self.assertEqual(len(before), len(after))
+        changed = [(b, a) for b, a in zip(before, after) if b != a]
+        self.assertEqual(changed, [("speed: 150", "speed: 300"), ("speed:150", "speed:300")])
+        section = None
+        for b, a in zip(before, after):
+            if b.startswith("["):
+                section = b
+            if b != a:
+                self.assertIn(section, ("[z_tilt]", "[bed_mesh]"))
+
+    def test_apply_then_revert_gives_back_qidis_files(self):
+        texts = stock_texts()
         for feature in FEATURES:
             self.assertEqual(core.feature_status(texts, feature), "available")
             core.apply_feature(texts, feature)
             self.assertEqual(core.feature_status(texts, feature), "applied")
         for feature in FEATURES:
             core.revert_feature(texts, feature)
-        self.assertEqual(texts["gcode_macro.cfg"], stock_text())
+        self.assertEqual(texts, stock_texts())
+
+    def test_own_probe_speed_is_left_alone(self):
+        texts = stock_texts()
+        texts["printer.cfg"] = texts["printer.cfg"].replace("speed:150\n", "speed:250\n")
+        self.assertEqual(core.feature_status(texts, by_id("bed_mesh_probe_moves")), "skipped")
+        self.assertEqual(core.feature_status(texts, by_id("z_tilt_probe_moves")), "available")
+
+    def test_saved_mesh_in_the_autosave_block_doesnt_count(self):
+        texts = stock_texts()
+        texts["printer.cfg"] += "#*# [bed_mesh default]\n#*# version = 1\n"
+        for feature_id in ("bed_mesh_probe_moves", "z_tilt_probe_moves"):
+            self.assertEqual(core.feature_status(texts, by_id(feature_id)), "available")
 
     def test_hand_changed_macro_is_left_alone(self):
         changed = stock_text().replace("            G4 P100\n", "            G4 P150\n")
@@ -115,23 +156,27 @@ class InstallTests(unittest.TestCase):
     def test_install_and_uninstall_round_trip(self):
         klipper = FakeKlipper()
         core.install(self.printer.paths, klipper, self.printer.report)
-        self.assertNotEqual(self.printer.macro_text(), stock_text())
+        for name in STOCK:
+            self.assertNotEqual(self.printer.text(name), stock_text(name), name)
         self.assertEqual(sorted(core.load_state(self.printer.paths)["applied"]),
                          sorted(f.id for f in FEATURES))
         core.uninstall(self.printer.paths, klipper, self.printer.report)
-        self.assertEqual(self.printer.macro_text(), stock_text())
+        for name in STOCK:
+            self.assertEqual(self.printer.text(name), stock_text(name), name)
         self.assertEqual(klipper.restarts, 2)
 
-    def test_install_keeps_a_backup_of_qidis_file(self):
+    def test_install_keeps_a_backup_of_qidis_files(self):
         core.install(self.printer.paths, FakeKlipper(), self.printer.report)
         folder = core.load_state(self.printer.paths)["last_backup"]
-        with open(os.path.join(folder, "gcode_macro.cfg"), "r", encoding="utf-8", newline="") as handle:
-            self.assertEqual(handle.read(), stock_text())
+        for name in STOCK:
+            with open(os.path.join(folder, name), "r", encoding="utf-8", newline="") as handle:
+                self.assertEqual(handle.read(), stock_text(name), name)
 
     def test_dry_run_changes_nothing(self):
         klipper = FakeKlipper()
         core.install(self.printer.paths, klipper, self.printer.report, dry_run=True)
-        self.assertEqual(self.printer.macro_text(), stock_text())
+        for name in STOCK:
+            self.assertEqual(self.printer.text(name), stock_text(name), name)
         self.assertFalse(os.path.exists(self.printer.paths.state_dir))
         self.assertEqual(klipper.restarts, 0)
 
@@ -139,8 +184,29 @@ class InstallTests(unittest.TestCase):
         klipper = FakeKlipper(ready=False)
         with self.assertRaises(GreaseError):
             core.install(self.printer.paths, klipper, self.printer.report)
-        self.assertEqual(self.printer.macro_text(), stock_text())
+        for name in STOCK:
+            self.assertEqual(self.printer.text(name), stock_text(name), name)
         self.assertEqual(core.load_state(self.printer.paths).get("applied", []), [])
+
+    def test_upgrade_from_0_1_adds_the_new_changes_and_keeps_the_old(self):
+        texts = {"gcode_macro.cfg": self.printer.macro_text()}
+        core.apply_feature(texts, by_id("print_start_runout_dwell"))
+        with open(self.printer.macro, "w", encoding="utf-8", newline="") as handle:
+            handle.write(texts["gcode_macro.cfg"])
+        core.save_state(self.printer.paths, {"version": "0.1.0", "applied": ["print_start_runout_dwell"]})
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report)
+        self.assertEqual(sorted(core.load_state(self.printer.paths)["applied"]), sorted(f.id for f in FEATURES))
+        self.assertIn("speed: 300\n", self.printer.text("printer.cfg"))
+
+    def test_beacon_printer_with_its_own_bed_mesh_gets_the_rest(self):
+        path = self.printer.paths.config_file("printer.cfg")
+        with open(path, "w", encoding="utf-8", newline="") as handle:
+            handle.write(stock_text("printer.cfg").replace("[bed_mesh]\nspeed:150\n", "[bed_mesh]\nspeed: 200\n"))
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report)
+        applied = core.load_state(self.printer.paths)["applied"]
+        self.assertIn("z_tilt_probe_moves", applied)
+        self.assertNotIn("bed_mesh_probe_moves", applied)
+        self.assertIn("[bed_mesh]\nspeed: 200\n", self.printer.text("printer.cfg"))
 
     def test_second_install_changes_nothing(self):
         core.install(self.printer.paths, FakeKlipper(), self.printer.report)

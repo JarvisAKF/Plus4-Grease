@@ -14,8 +14,12 @@ Small, reversible improvements for the **QIDI Plus 4** on QIDI firmware **V2.1.1
 |---|---|
 | Print start: no 1.6 s wait while clearing the Box runout flags | QIDI's `PRINT_START` waits 0.1 s after clearing each of 16 flags. Each save already finishes before the next command, so the waits are dead time. |
 | Bed mesh: 0.5 s instead of 5 s before saving a new mesh | QIDI's `G29` waits a fixed 5 s after measuring before it saves the mesh. Valve Oil made the same cut on the Max 4 and Plus 5. |
+| Z tilt: 300 mm/s instead of 150 between probe points | Each 255 mm trip between `Z_TILT_ADJUST`'s two points takes about 0.9 s instead of 1.7 s. Only the travel changes, not the probing. |
+| Bed mesh: 300 mm/s instead of 150 between probe points | A full 9×9 mesh spends about 8 s less moving; adaptive meshes save in proportion. With a Beacon it's also the scan speed. Only the travel changes, not the probing. |
 
-That's version 0.1: the installer, with checks and backups, and two changes that trim waiting. What's been tried on real printers is in [docs/testing.md](docs/testing.md). More follows as each change is tested on a Plus 4. See [What's next](#whats-next).
+The two speed changes are in `printer.cfg` (`speed:` under `[z_tilt]` and `[bed_mesh]`). The Plus 4's X/Y motors are open-loop, and Valve Oil's Plus 5 lost position at 565 mm/s, so this was measured first: on a tested Plus 4, `tools/speed_test.py` ran X/Y up to 500 mm/s at the full 20000 mm/s² over the probing area with no lost steps. 300 leaves room for printers that haven't been tested; faster would save under 2 s more per full mesh. A speed you've set yourself is left alone.
+
+That's version 0.2: the installer, with checks and backups, two changes that trim waiting, and two that speed up probing. What's been tried on real printers is in [docs/testing.md](docs/testing.md). More follows as each change is tested on a Plus 4. See [What's next](#whats-next).
 
 ## How it stays safe
 
@@ -33,7 +37,7 @@ You need SSH access to the printer as `mks`. QIDI's default password is `makerba
 
 - On the printer, if it can reach the internet:
   ```
-  git clone https://github.com/JarvisAKF/plus4-grease ~/plus4-grease
+  git clone https://github.com/JarvisAKF/Plus4-Grease ~/plus4-grease
   ```
 - Or from your computer, with this repository downloaded (in PowerShell on Windows):
   ```
@@ -62,15 +66,16 @@ bash ~/plus4-grease/install.sh status      # what's applied
 bash ~/plus4-grease/install.sh uninstall   # put QIDI's lines back
 ```
 
-**After a QIDI firmware update,** run `install` again. QIDI's update replaces `gcode_macro.cfg`, and `status` says so when it has.
+**After a QIDI firmware update,** run `install` again. QIDI's update can replace its config files, and `status` says so when it has.
 
 ## What's next
 
 Candidates, each needing a test on a Plus 4 before it ships:
 
-- Faster moves between probe points for Z tilt and bed mesh. QIDI uses 150 mm/s. The Plus 4's X/Y motors are open-loop, and the Plus 5 lost position when Valve Oil ran them at 565, so this needs measuring first: `python3 ~/plus4-grease/tools/speed_test.py` moves the toolhead at rising speeds and re-homes after each to find where steps start getting lost. It changes no files, and results go to `~/plus4-grease-speed-test-<date>.txt`; please share yours in an issue.
 - Saving the bed mesh without freezing Klipper for about two seconds, ported from Valve Oil.
 - Fixes for QIDI Box bugs on the Plus 4, such as its Box software looking for the filament list in the wrong folder (`/home/qidi`).
+
+**Speed test.** `python3 ~/plus4-grease/tools/speed_test.py` moves the toolhead over the probing area at rising speeds, staying out of QIDI's no-print zones, and re-homes after each to find where steps start getting lost. It changes no files, and results go to `~/plus4-grease-speed-test-<date>.txt`. Results from more printers help decide whether 300 mm/s can go higher; please share yours in an issue.
 
 What's known about the Plus 4's software is in [docs/plus4-notes.md](docs/plus4-notes.md). `tools/collect_plus4.py` gathers the same information from a printer, read-only, with serial numbers removed.
 
