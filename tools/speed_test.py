@@ -27,7 +27,7 @@ import urllib.parse
 import urllib.request
 
 MOONRAKER = "http://127.0.0.1:7125"
-MARGIN = 20.0  # mm kept clear of each end of travel
+MARGIN = 20.0  # mm kept clear of each end of travel, by default
 STEPPERS = ("stepper_x", "stepper_y")  # on CoreXY, the A and B motors
 
 
@@ -85,6 +85,14 @@ def main(argv=None):
     parser.add_argument("--accel", type=float, default=None,
                         help="mm/s^2 for the test moves (default: the printer's max_accel)")
     parser.add_argument("--repeats", type=int, default=5, help="times through the pattern at each speed")
+    parser.add_argument("--margin", type=float, default=MARGIN,
+                        help="mm to stay inside each end of travel (default %(default)s)")
+    parser.add_argument("--locate", action="store_true",
+                        help="instead of rising speeds, run each edge and diagonal on its own at one gentle speed "
+                             "and re-home after each, to find where steps get lost")
+    parser.add_argument("--locate-speed", type=float, default=100.0, help="mm/s for --locate (default %(default)s)")
+    parser.add_argument("--locate-accel", type=float, default=5000.0,
+                        help="mm/s^2 for --locate (default %(default)s)")
     parser.add_argument("--yes", action="store_true", help="don't ask before moving")
     args = parser.parse_args(argv)
     speeds = [float(s) for s in args.speeds.split(",") if s.strip()]
@@ -99,8 +107,8 @@ def main(argv=None):
     toolhead = status["toolhead"]
     limits = {name: (float(settings[name]["position_min"]), float(settings[name]["position_max"]))
               for name in STEPPERS}
-    xmin, xmax = limits["stepper_x"][0] + MARGIN, limits["stepper_x"][1] - MARGIN
-    ymin, ymax = limits["stepper_y"][0] + MARGIN, limits["stepper_y"][1] - MARGIN
+    xmin, xmax = limits["stepper_x"][0] + args.margin, limits["stepper_x"][1] - args.margin
+    ymin, ymax = limits["stepper_y"][0] + args.margin, limits["stepper_y"][1] - args.margin
     max_velocity = float(settings["printer"]["max_velocity"])
     accel = args.accel or float(settings["printer"]["max_accel"])
     microsteps = int(settings["stepper_x"]["microsteps"])
@@ -109,9 +117,14 @@ def main(argv=None):
     speeds = [s for s in speeds if s <= max_velocity]
     park = (xmin, ymin)
 
-    print("Speeds {} mm/s at {:.0f} mm/s^2, {} times through the pattern each, inside X {:.0f}-{:.0f} and "
-          "Y {:.0f}-{:.0f}.".format(", ".join("{:.0f}".format(s) for s in speeds), accel, args.repeats,
-                                    xmin, xmax, ymin, ymax))
+    if args.locate:
+        print("Each edge and diagonal on its own, {} times back and forth at {:.0f} mm/s and {:.0f} mm/s^2, inside "
+              "X {:.0f}-{:.0f} and Y {:.0f}-{:.0f}, re-homing after each.".format(
+                  args.repeats, args.locate_speed, args.locate_accel, xmin, xmax, ymin, ymax))
+    else:
+        print("Speeds {} mm/s at {:.0f} mm/s^2, {} times through the pattern each, inside X {:.0f}-{:.0f} and "
+              "Y {:.0f}-{:.0f}.".format(", ".join("{:.0f}".format(s) for s in speeds), accel, args.repeats,
+                                        xmin, xmax, ymin, ymax))
     print("The toolhead will move fast across the whole bed. Clear the bed and keep hands out.")
     if not args.yes and input("Type yes to start: ").strip().lower() != "yes":
         print("Not started.")
@@ -160,6 +173,9 @@ def main(argv=None):
         log("Homing repeats within {} / {} microsteps (A / B); a drift beyond one full step ({} microsteps) "
             "counts as lost steps.".format(spread["stepper_x"], spread["stepper_y"], microsteps))
         first = homes[-1]
+        if args.locate:
+            return locate(args, gcode, rehome, log, first, threshold, mm_per_microstep, park,
+                          (xmin, xmax, ymin, ymax))
         log("{:>7}  {:>14}  {:>14}  result".format("mm/s", "A drift", "B drift"))
         safe = None
         for speed in speeds:
@@ -190,6 +206,43 @@ def main(argv=None):
         with open(path, "w") as handle:
             handle.write("\n".join(lines) + "\n")
         print("Speed and acceleration limits put back. Results saved to {}".format(path))
+    return 0
+
+
+def locate(args, gcode, rehome, log, first, threshold, mm_per_microstep, park, box):
+    """Runs each edge and diagonal back and forth on its own, re-homing after each, so the drift points at
+    where the steps are lost. Getting to a segment's start goes along the front or left edge from the park
+    corner, so read a segment's result together with those two."""
+    xmin, xmax, ymin, ymax = box
+    segments = [
+        ("front edge (Y {:.0f})".format(ymin), (xmin, ymin), (xmax, ymin)),
+        ("left edge (X {:.0f})".format(xmin), (xmin, ymin), (xmin, ymax)),
+        ("back edge (Y {:.0f})".format(ymax), (xmin, ymax), (xmax, ymax)),
+        ("right edge (X {:.0f})".format(xmax), (xmax, ymin), (xmax, ymax)),
+        ("diagonal front-left to back-right", (xmin, ymin), (xmax, ymax)),
+        ("diagonal back-left to front-right", (xmin, ymax), (xmax, ymin)),
+    ]
+    feed = args.locate_speed * 60
+    log("{:<36}  {:>14}  {:>14}  result".format("segment", "A drift", "B drift"))
+    any_lost = False
+    for name, start, end in segments:
+        gcode("SET_VELOCITY_LIMIT VELOCITY=100 ACCEL=5000\nG90\nG1 X{:.1f} Y{:.1f} F6000\nM400".format(*start))
+        moves = []
+        for _ in range(args.repeats):
+            moves.append("G1 X{:.1f} Y{:.1f} F{:.0f}".format(end[0], end[1], feed))
+            moves.append("G1 X{:.1f} Y{:.1f} F{:.0f}".format(start[0], start[1], feed))
+        gcode("SET_VELOCITY_LIMIT VELOCITY={:.0f} ACCEL={:.0f}\n".format(args.locate_speed, args.locate_accel)
+              + "\n".join(moves) + "\nM400\nSET_VELOCITY_LIMIT VELOCITY=100 ACCEL=5000")
+        after = rehome(park)
+        drift = {n: after[n] - first[n] for n in STEPPERS}
+        lost = any(abs(drift[n]) > threshold[n] for n in STEPPERS)
+        any_lost = any_lost or lost
+        log("{:<36}  {:>6} ({:+.2f}mm)  {:>6} ({:+.2f}mm)  {}".format(
+            name, drift["stepper_x"], drift["stepper_x"] * mm_per_microstep,
+            drift["stepper_y"], drift["stepper_y"] * mm_per_microstep, "LOST STEPS" if lost else "ok"))
+        first = after
+    log("Lost steps on at least one segment; look at what the toolhead, its cables, or belt B meet there."
+        if any_lost else "No segment lost steps at this speed and margin.")
     return 0
 
 
