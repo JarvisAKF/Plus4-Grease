@@ -75,6 +75,13 @@ def rehome(park):
     return mcu_positions()
 
 
+def verdict(drift, threshold):
+    """'ok', or how many 4-full-step slips each motor that lost steps made (threshold is half a slip)."""
+    slips = ["{} {}".format("A" if name == "stepper_x" else "B", int(round(drift[name] / (2.0 * threshold[name]))))
+             for name in STEPPERS if abs(drift[name]) >= threshold[name]]
+    return "LOST STEPS (4-full-step slips: {})".format(", ".join(slips)) if slips else "ok"
+
+
 def pattern(xmin, xmax, ymin, ymax):
     xmid, ymid = (xmin + xmax) / 2, (ymin + ymax) / 2
     return [(xmin, ymin), (xmax, ymax), (xmin, ymax), (xmax, ymin),   # both diagonals
@@ -188,7 +195,7 @@ def main(argv=None):
         log("Homing...")
         gcode("G28\nG90\nG1 Z10 F600\nM400")
         gcode("SET_VELOCITY_LIMIT VELOCITY=100 ACCEL=5000")
-        # Homing alone first: re-home with no moves in between. If that doesn't land within a full step,
+        # Homing alone first: re-home with no moves in between. If that doesn't land within 2 full steps,
         # nothing after it can tell lost steps from homing, so stop and say so.
         first = rehome(park)
         homes = [first]
@@ -199,10 +206,14 @@ def main(argv=None):
             offsets = [h[name] - first[name] for h in homes]
             log("  {}: {}".format(label, ", ".join("{:+d}".format(o) for o in offsets)))
         spread = {name: max(h[name] for h in homes) - min(h[name] for h in homes) for name in STEPPERS}
-        bad = [name for name in STEPPERS if spread[name] > microsteps]
+        # Sensorless homing (StallGuard) only checks for a stall once per full step, so a home can land a whole
+        # full step either way. A stepper that slips can only fall back by a whole electrical cycle, 4 full
+        # steps. Half of that is the line: under it is homing, at or over it is lost steps.
+        slip = 4 * microsteps
+        limit = slip // 2
+        bad = [name for name in STEPPERS if spread[name] >= limit]
         if bad:
             for name in bad:
-                slip = 4 * microsteps
                 offsets = [h[name] - first[name] for h in homes]
                 whole = all(abs(o - slip * round(o / slip)) <= microsteps / 4 for o in offsets)
                 log("Homing isn't repeatable on {}: it varied by {} microsteps ({:.1f} full steps, {:.2f} mm) with "
@@ -214,9 +225,10 @@ def main(argv=None):
             log("A speed test can't separate lost steps from homing on this printer, so it stops here. Homing "
                 "needs looking at first.")
             return 1
-        threshold = {name: microsteps for name in STEPPERS}
-        log("Homing repeats within {} / {} microsteps (A / B); a drift beyond one full step ({} microsteps) "
-            "counts as lost steps.".format(spread["stepper_x"], spread["stepper_y"], microsteps))
+        threshold = {name: limit for name in STEPPERS}
+        log("Homing repeats within {} / {} microsteps (A / B). A home can land a whole full step ({} microsteps) "
+            "either way; a slipping motor jumps 4 full steps ({}) at a time, so a drift of {} or more counts as "
+            "lost steps.".format(spread["stepper_x"], spread["stepper_y"], microsteps, slip, limit))
         first = homes[-1]
         if args.locate:
             return locate(args, gcode, rehome, log, first, threshold, mm_per_microstep, park,
@@ -231,11 +243,11 @@ def main(argv=None):
             gcode("SET_VELOCITY_LIMIT VELOCITY=100 ACCEL=5000")
             after = rehome(park)
             drift = {name: after[name] - first[name] for name in STEPPERS}
-            lost = any(abs(drift[name]) > threshold[name] for name in STEPPERS)
+            lost = any(abs(drift[name]) >= threshold[name] for name in STEPPERS)
             log("{:7.0f}  {:>6} ({:+.2f}mm)  {:>6} ({:+.2f}mm)  {}".format(
                 speed, drift["stepper_x"], drift["stepper_x"] * mm_per_microstep,
                 drift["stepper_y"], drift["stepper_y"] * mm_per_microstep,
-                "LOST STEPS" if lost else "ok"))
+                verdict(drift, threshold)))
             if lost:
                 break
             safe = speed
@@ -280,11 +292,11 @@ def locate(args, gcode, rehome, log, first, threshold, mm_per_microstep, park, b
               + "\n".join(moves) + "\nM400\nSET_VELOCITY_LIMIT VELOCITY=100 ACCEL=5000")
         after = rehome(park)
         drift = {n: after[n] - first[n] for n in STEPPERS}
-        lost = any(abs(drift[n]) > threshold[n] for n in STEPPERS)
+        lost = any(abs(drift[n]) >= threshold[n] for n in STEPPERS)
         any_lost = any_lost or lost
         log("{:<36}  {:>6} ({:+.2f}mm)  {:>6} ({:+.2f}mm)  {}".format(
             name, drift["stepper_x"], drift["stepper_x"] * mm_per_microstep,
-            drift["stepper_y"], drift["stepper_y"] * mm_per_microstep, "LOST STEPS" if lost else "ok"))
+            drift["stepper_y"], drift["stepper_y"] * mm_per_microstep, verdict(drift, threshold)))
         first = after
     log("Lost steps on at least one segment; look at what the toolhead, its cables, or belt B meet there."
         if any_lost else "No segment lost steps at this speed and margin.")
