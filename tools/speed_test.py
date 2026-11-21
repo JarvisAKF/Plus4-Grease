@@ -130,18 +130,36 @@ def main(argv=None):
         log("Homing...")
         gcode("G28\nG90\nG1 Z10 F600\nM400")
         gcode("SET_VELOCITY_LIMIT VELOCITY=100 ACCEL=5000")
-        # Homing noise: how much the same endstop moves between homes with only slow moves in between.
+        # Homing alone first: re-home with no moves in between. If that doesn't land within a full step,
+        # nothing after it can tell lost steps from homing, so stop and say so.
         first = rehome(park)
-        noise = {name: 0 for name in STEPPERS}
-        for _ in range(3):
-            moves = "\n".join("G1 X{:.1f} Y{:.1f} F6000".format(x, y) for x, y in pattern(xmin, xmax, ymin, ymax))
-            gcode("G90\n" + moves + "\nM400")
-            again = rehome(park)
-            for name in STEPPERS:
-                noise[name] = max(noise[name], abs(again[name] - first[name]))
-        threshold = {name: max(2 * noise[name], microsteps) for name in STEPPERS}
-        log("Homing repeats within {} / {} microsteps (A / B); a drift beyond {} / {} counts as lost steps."
-            .format(noise["stepper_x"], noise["stepper_y"], threshold["stepper_x"], threshold["stepper_y"]))
+        homes = [first]
+        for _ in range(4):
+            homes.append(rehome(park))
+        log("Homing X and Y 5 times with no moves in between (motor step counts relative to the first):")
+        for name, label in zip(STEPPERS, ("A (stepper_x)", "B (stepper_y)")):
+            offsets = [h[name] - first[name] for h in homes]
+            log("  {}: {}".format(label, ", ".join("{:+d}".format(o) for o in offsets)))
+        spread = {name: max(h[name] for h in homes) - min(h[name] for h in homes) for name in STEPPERS}
+        bad = [name for name in STEPPERS if spread[name] > microsteps]
+        if bad:
+            for name in bad:
+                slip = 4 * microsteps
+                offsets = [h[name] - first[name] for h in homes]
+                whole = all(abs(o - slip * round(o / slip)) <= microsteps / 4 for o in offsets)
+                log("Homing isn't repeatable on {}: it varied by {} microsteps ({:.1f} full steps, {:.2f} mm) with "
+                    "no moves at all.{}".format(
+                        "motor A" if name == "stepper_x" else "motor B", spread[name], spread[name] / microsteps,
+                        spread[name] * mm_per_microstep,
+                        " The differences are whole multiples of 4 full steps, the jump a stepper makes when it "
+                        "slips, so the motor is most likely slipping while homing that axis." if whole else ""))
+            log("A speed test can't separate lost steps from homing on this printer, so it stops here. Homing "
+                "needs looking at first.")
+            return 1
+        threshold = {name: microsteps for name in STEPPERS}
+        log("Homing repeats within {} / {} microsteps (A / B); a drift beyond one full step ({} microsteps) "
+            "counts as lost steps.".format(spread["stepper_x"], spread["stepper_y"], microsteps))
+        first = homes[-1]
         log("{:>7}  {:>14}  {:>14}  result".format("mm/s", "A drift", "B drift"))
         safe = None
         for speed in speeds:
