@@ -7,8 +7,9 @@ Each release is tried on real printers before it's called tested. Add a line for
 | 0.1.0 | 2026-11-21 | Plus 4, Beacon probe conversion, QIDI Box | V2.1.1 | `install --dry-run`, `install`, a Box print | Dry run read the firmware with `sudo` and listed print start `available`, bed mesh `skipped` (the Beacon conversion's `G29` isn't QIDI's). Install backed up `gcode_macro.cfg`, applied print start, and Klipper restarted ready. The print with the Box started normally and finished without problems. |
 | 0.1.0 | 2026-11-21 | Plus 4, Beacon probe conversion, QIDI Box | V2.1.1 | `uninstall`, `status`, `install` | Uninstall put QIDI's print start lines back and Klipper restarted ready; `status` showed print start `available` again. A second install backed up the file, applied print start again, and Klipper restarted ready. |
 | 0.2.0 | 2026-11-21 | Plus 4, Beacon probe conversion, QIDI Box | V2.1.1 | `install --dry-run --replace-own-speeds`, `install --replace-own-speeds` (upgrade from 0.1.0) | Print start stayed `applied`, bed mesh save `skipped`. Both speed changes were skipped without the switch: the conversion had `speed: 200` under `[z_tilt]` and its own `[bed_mesh]` with speed 150. With the switch, install replaced both, backed up `printer.cfg`, Klipper restarted ready, and Klipper's loaded settings showed speed 300 under `[z_tilt]` and `[bed_mesh]`. |
+| 0.2.0 | 2026-11-21 | Plus 4, Beacon probe conversion, QIDI Box | V2.1.1 | A print (about 45 min) after installing | Z tilt and the Beacon mesh ran at 300 mm/s between points, the print started and finished normally. |
 
-Still untested: the bed mesh save change (needs a printer with QIDI's stock `G29`), the 0.2.0 probe speeds in a real print, and any stock Plus 4.
+Still untested: the bed mesh save change (needs a printer with QIDI's stock `G29`), the probe speeds with QIDI's stock probe, and any stock Plus 4.
 
 ## Speed test (`tools/speed_test.py`), for faster probe moves
 
