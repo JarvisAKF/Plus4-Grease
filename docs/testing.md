@@ -19,6 +19,7 @@ Each release is tried on real printers before it's called tested. Add a line for
 | 0.7.1 | 2026-11-22 | Not on a printer yet: a computer | - | Fluidd build 4 | Type-check and lint clean; 73 Box tests pass, including five new ones for the Plus 4's hall sensor. |
 | 0.7.1 | 2026-11-22 | Plus 4, Beacon probe conversion, QIDI Box | V2.1.1 | `fluidd install` (update to build 4), slot 1A loaded | The card drew the black PLA from 1A through the hub and the toolhead sensor (both lit) and the extruder to the nozzle, matching where the filament was. |
 | 0.8.0 | 2026-11-22 | Not on a printer yet: a computer | - | Fluidd build 5 | Type-check and lint clean; all 881 of Fluidd's unit tests pass, including 76 for the Box (three new for filament limits by name). |
+| 0.8.0 | 2026-11-22 | Plus 4, Beacon probe conversion, QIDI Box | V2.1.1 | `fluidd install` (update to build 5) | The Box card read the filament list and showed Box 1's heater locked at 0 °C, with PLA Silk, PLA Basic and PLA Rapido loaded (all 0 in QIDI's list). The Box settings button showed in the card's header. |
 
 Still untested: the bed mesh save change (needs a printer with QIDI's stock `G29`), the probe speeds with QIDI's stock probe, `--board-fan` and `--balanced-chamber` installed by Plus4 Grease (their settings have run for over a year on the Beacon printer above, written by hand), the new Fluidd's camera pass-through (no camera on the tested printer), the Box card's Unload, Eject, Read RFID and Box settings on a printer, the Box heater limit on a printer, and any stock Plus 4.
 
