@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.7.0
+- The new Fluidd's Box card has Load, Unload, Eject and Read RFID for the selected slot (Fluidd build 3). They send exactly what QIDI's own Fluidd sends on V2.1.1: `E_LOAD slot=N`, `E_UNLOAD slot=N`, `E_BOX slot=N` and `RFID_READ SLOT=slotN`. Valve Oil's commands for QIDI's newer firmware are never sent. The buttons are off while printing, while the Box is busy or Klipper isn't ready, and until Klipper answers the last Box command; Load is off for the slot that's loaded and Unload for every other slot.
+
 ## 0.6.0
 - The new Fluidd has a QIDI Box card (Plus4 Grease build 2 of Fluidd v1.38.1). It shows each slot's filament, color and RFID state, the Box's humidity and temperature, which slot is loaded, the hub and toolhead sensors, tool mapping, auto-reload groups, and a running or failed Box step with QIDI's error. It's read-only: load, unload and drying stay on the touchscreen and QIDI's page. Ported from Valve Oil's Fluidd; see `fluidd/README.md`.
 - `install.sh fluidd install` updates an installed earlier build in place and keeps its settings; `status` says when an update is waiting.

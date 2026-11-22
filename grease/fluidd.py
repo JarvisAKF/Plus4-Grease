@@ -1,7 +1,7 @@
 """Plus4 Grease Fluidd: a current Fluidd served beside QIDI's. Python 3.7.
 
 QIDI's Fluidd stays exactly as it is on port 80, Box panel and all. This adds upstream Fluidd (v1.38.1),
-with a read-only QIDI Box card ported from Valve Oil's Fluidd (fluidd/plus4-grease.patch), on port 81, served by the nginx that's already running, from its own folder (~/plus4-grease-fluidd) and
+with a QIDI Box card ported from Valve Oil's Fluidd (fluidd/plus4-grease.patch), on port 81, served by the nginx that's already running, from its own folder (~/plus4-grease-fluidd) and
 its own nginx site file. Its settings live in their own Moonraker namespace (plus4_grease_fluidd); the
 first install copies QIDI Fluidd's settings in so the layout, macros and theme carry over. Removing it
 deletes the site file and the folder. Nothing of QIDI's is changed at any point.
@@ -30,10 +30,10 @@ from . import system
 from .core import GreaseError
 
 FLUIDD_VERSION = "v1.38.1"
-BUILD = 2  # Plus4 Grease's own build number for this Fluidd version; 2 adds the read-only QIDI Box card
+BUILD = 3  # Plus4 Grease's own build number for this Fluidd version; 2 added the QIDI Box card, 3 its buttons
 BUNDLE_VERSION = "{}-{}".format(FLUIDD_VERSION, BUILD)
 BUNDLE_NAME = "plus4-grease-fluidd-{}.zip".format(BUNDLE_VERSION)
-BUNDLE_SHA256 = "1897da1133d5bb3f13093ad57ff5932dadc73910ec8b5c876ac60f6ffbf5d914"
+BUNDLE_SHA256 = "edb3538010bd2bb068e52e56892cb7c3e4ccfbc4445758bbd8230e1f891e1e97"
 PORT = 81
 NAMESPACE = "plus4_grease_fluidd"
 QIDI_NAMESPACE = "fluidd"

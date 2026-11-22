@@ -1,9 +1,9 @@
 diff --git a/src/components/widgets/qidiBox/QidiBoxCard.vue b/src/components/widgets/qidiBox/QidiBoxCard.vue
 new file mode 100644
-index 0000000..2c1fb16
+index 0000000..5128ed2
 --- /dev/null
 +++ b/src/components/widgets/qidiBox/QidiBoxCard.vue
-@@ -0,0 +1,359 @@
+@@ -0,0 +1,472 @@
 +<template>
 +  <collapsable-card
 +    :title="$t('app.qidi_box.title.qidi_box')"
@@ -68,8 +68,29 @@ index 0000000..2c1fb16
 +      </v-alert>
 +
 +      <div class="mt-3 pa-3 rounded-lg qidi-box-card__sheet">
-+        <div class="text-overline text--secondary qidi-box-card__overline">
-+          {{ overline }}
++        <div class="d-flex align-center">
++          <div class="text-overline text--secondary qidi-box-card__overline">
++            {{ overline }}
++          </div>
++          <v-spacer />
++          <v-tooltip top>
++            <template #activator="{ on, attrs }">
++              <app-btn
++                icon
++                small
++                :disabled="slotControlsDisabled"
++                :aria-label="$t('app.qidi_box.btn.read_rfid')"
++                v-bind="attrs"
++                v-on="on"
++                @click="readRfid"
++              >
++                <v-icon small>
++                  $qidiBoxRfid
++                </v-icon>
++              </app-btn>
++            </template>
++            <span>{{ $t('app.qidi_box.btn.read_rfid') }}</span>
++          </v-tooltip>
 +        </div>
 +        <div
 +          v-if="current.present && current.name"
@@ -107,8 +128,50 @@ index 0000000..2c1fb16
 +          </span>
 +        </div>
 +
++        <div class="mt-3 qidi-box-card__controls">
++          <app-btn
++            small
++            :disabled="actionDisabled(load)"
++            @click="sendAction(load)"
++          >
++            <v-icon
++              small
++              left
++            >
++              $loadFilament
++            </v-icon>
++            {{ $t('app.qidi_box.btn.load') }}
++          </app-btn>
++          <app-btn
++            small
++            :disabled="actionDisabled(unload)"
++            @click="sendAction(unload)"
++          >
++            <v-icon
++              small
++              left
++            >
++              $unloadFilament
++            </v-icon>
++            {{ $t('app.qidi_box.btn.unload') }}
++          </app-btn>
++          <app-btn
++            small
++            :disabled="actionDisabled(eject)"
++            @click="sendAction(eject)"
++          >
++            <v-icon
++              small
++              left
++            >
++              $qidiBoxEject
++            </v-icon>
++            {{ $t('app.qidi_box.btn.eject') }}
++          </app-btn>
++        </div>
++
 +        <div class="text-caption text--disabled mt-2">
-+          {{ $t('app.qidi_box.msg.read_only') }}
++          {{ $t('app.qidi_box.msg.plus4_commands') }}
 +        </div>
 +      </div>
 +    </div>
@@ -116,11 +179,14 @@ index 0000000..2c1fb16
 +</template>
 +
 +<script lang="ts">
-+// Plus4 Grease: a read-only QIDI Box card for the Plus 4 on QIDI firmware V2.1.1. The Box drawing (QidiBoxFlow and
-+// the parts it uses), the Box store, and the slot and task parsing come from Valve Oil's Fluidd
-+// (github.com/thelegendtubaguy/fluidd, GPL-3.0); this card is Valve Oil's QidiBoxCard with every command taken out,
-+// so it sends nothing to the printer.
-+import { Component, Vue, Watch } from 'vue-property-decorator'
++// Plus4 Grease: a QIDI Box card for the Plus 4 on QIDI firmware V2.1.1. The Box drawing (QidiBoxFlow and the parts
++// it uses), the Box store, and the slot and task parsing come from Valve Oil's Fluidd
++// (github.com/thelegendtubaguy/fluidd, GPL-3.0). This card is Valve Oil's QidiBoxCard cut down to the commands QIDI's
++// own Fluidd sends on V2.1.1: E_LOAD, E_UNLOAD and E_BOX with slot=N, and RFID_READ SLOT=slotN. The Plus 4 publishes
++// multi_color_controller, but not the newer firmware's LOAD_FILAMENT_CONTROL family, so those are never sent.
++import { Component, Mixins, Watch } from 'vue-property-decorator'
++import StateMixin from '@/mixins/state'
++import { Waits } from '@/globals'
 +import {
 +  QIDI_BOX_EXTERNAL_SLOT,
 +  qidiBoxReloadGroups,
@@ -131,6 +197,9 @@ index 0000000..2c1fb16
 +} from '@/util/qidi-box'
 +import { QIDI_BOX_STEP_UNKNOWN, type QidiBoxError, type QidiBoxStepText } from '@/util/qidi-box-task'
 +import QidiBoxFlow from './QidiBoxFlow.vue'
++
++const [EJECT, LOAD, UNLOAD] = [0, 1, 2]
++const COMMANDS = ['E_BOX', 'E_LOAD', 'E_UNLOAD']
 +
 +interface Detail {
 +  key: string;
@@ -143,7 +212,11 @@ index 0000000..2c1fb16
 +    QidiBoxFlow
 +  }
 +})
-+export default class QidiBoxCard extends Vue {
++export default class QidiBoxCard extends Mixins(StateMixin) {
++  readonly eject = EJECT
++  readonly load = LOAD
++  readonly unload = UNLOAD
++
 +  selected = 0
 +
 +  get boxCount (): number {
@@ -178,6 +251,10 @@ index 0000000..2c1fb16
 +
 +  get loadedSlot (): number | null {
 +    return this.$typedGetters['qidiBox/getLoadedSlot']
++  }
++
++  get lastLoadSlot (): number | null {
++    return this.$typedGetters['qidiBox/getLastLoadSlot']
 +  }
 +
 +  get hub (): number | null {
@@ -289,6 +366,11 @@ index 0000000..2c1fb16
 +    }).toString()
 +  }
 +
++  // Box commands run one at a time; a command's buttons stay off until Klipper answers it.
++  get slotControlsDisabled (): boolean {
++    return this.busy || this.hasWait(Waits.onQidiBoxCommand) || this.currentExternal || !this.current.present
++  }
++
 +  @Watch('boxCount')
 +  onBoxCountChanged () {
 +    if (!this.slots.some(slot => slot.index === this.selected)) this.selected = this.loadedSlot ?? 0
@@ -307,6 +389,31 @@ index 0000000..2c1fb16
 +      temperature: sensor?.temperature != null ? Math.round(sensor.temperature) : null,
 +      target: target != null && target > 0 ? Math.round(target) : null
 +    }
++  }
++
++  // Filament at the inlet allows Eject and Load; the slot that last loaded, with filament at the hub, allows Unload
++  // instead of Load. The external spool has no Box controls.
++  actionDisabled (action: number): boolean {
++    if (this.slotControlsDisabled) return true
++
++    const loaded = this.hub === 0 && this.lastLoadSlot === this.current.index
++
++    if (action === LOAD) return loaded
++    if (action === UNLOAD) return !loaded
++
++    return false
++  }
++
++  sendAction (action: number) {
++    if (this.actionDisabled(action)) return
++
++    this.sendGcode(`${COMMANDS[action]} slot=${this.current.index}`, Waits.onQidiBoxCommand)
++  }
++
++  readRfid () {
++    if (this.slotControlsDisabled) return
++
++    this.sendGcode(`RFID_READ SLOT=slot${this.current.index}`, Waits.onQidiBoxCommand)
 +  }
 +
 +  stepText (text: QidiBoxStepText): string {
@@ -361,6 +468,12 @@ index 0000000..2c1fb16
 +
 +.qidi-box-card__details {
 +  gap: 4px 14px;
++}
++
++.qidi-box-card__controls {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 6px;
 +}
 +</style>
 diff --git a/src/components/widgets/qidiBox/QidiBoxFlow.vue b/src/components/widgets/qidiBox/QidiBoxFlow.vue
@@ -1626,10 +1739,16 @@ index 0000000..1d0be58
 +}
 +</style>
 diff --git a/src/globals.ts b/src/globals.ts
-index ed39791..1d2ac92 100644
+index ed39791..d4b391b 100644
 --- a/src/globals.ts
 +++ b/src/globals.ts
-@@ -347,6 +347,9 @@ export const Globals = Object.freeze({
+@@ -1,4 +1,5 @@
+ import {
++  mdiNfcVariant,
+   mdiClose,
+   mdiTune,
+   mdiMinus,
+@@ -347,6 +348,9 @@ export const Globals = Object.freeze({
    GITHUB_REPO: 'https://github.com/fluidd-core/fluidd'
  })
  
@@ -1639,17 +1758,29 @@ index ed39791..1d2ac92 100644
  export const Icons = Object.freeze({
    dash: mdiViewDashboardOutline,
    account: mdiAccount,
-@@ -589,6 +592,8 @@ export const Icons = Object.freeze({
+@@ -589,6 +593,10 @@ export const Icons = Object.freeze({
    afcEjectFilament: mdiEject,
    afcSelectTool: mdiRadioboxBlank,
    afcUnselectTool: mdiSwapHorizontalVariant,
 +  qidiBox: qidiBoxIcon,
 +  qidiBoxHumidity: mdiWater,
++  qidiBoxEject: mdiEject,
++  qidiBoxRfid: mdiNfcVariant,
  })
  
  export const Waits = Object.freeze({
+@@ -687,7 +695,8 @@ export const Waits = Object.freeze({
+   onMmuRelease: 'onMmuRelease',
+   onMmuServo: 'onMmuServo',
+   onMmuLed: 'onMmuLed',
+-  onMmuTestConfig: 'onMmuTestConfig'
++  onMmuTestConfig: 'onMmuTestConfig',
++  onQidiBoxCommand: 'onQidiBoxCommand'
+ })
+ 
+ export const SupportedLocales = Object.freeze([
 diff --git a/src/locales/en.yaml b/src/locales/en.yaml
-index 217e550..5f4dac1 100644
+index 217e550..5171c68 100644
 --- a/src/locales/en.yaml
 +++ b/src/locales/en.yaml
 @@ -1456,6 +1456,221 @@ app:
@@ -1753,7 +1884,7 @@ index 217e550..5f4dac1 100644
 +        filaments. Check it is valid JSON, then restart the printer.
 +      flow_failed_help: Retry runs the step again; Stop ends the Box operation.
 +      flow_failed_read_only: Retry or stop it on the touchscreen or on QIDI's page (port 80).
-+      read_only: This card only shows the Box. Load, unload and drying are on the touchscreen or QIDI's page (port 80).
++      plus4_commands: Load, Unload, Eject and Read RFID send the same commands as QIDI's own page. Drying is on the touchscreen or QIDI's page (port 80).
 +      loaded: Loaded %{slot}
 +      missing_slot: >-
 +        Choose a Box slot for every filament, or turn off the QIDI Box to print

@@ -2,11 +2,11 @@
 # Builds the Fluidd bundle that `install.sh fluidd install` puts on the printer. Run it on a PC, not the
 # printer: it needs git, Node 26 and pnpm 12, and the build takes a few minutes and about 1 GB of space.
 #
-#   bash tools/build_fluidd.sh            # builds v1.38.1, Plus4 Grease build 2
-#   bash tools/build_fluidd.sh v1.38.1 2
+#   bash tools/build_fluidd.sh            # builds v1.38.1, Plus4 Grease build 3
+#   bash tools/build_fluidd.sh v1.38.1 3
 #
 # What it changes from upstream Fluidd:
-#   * fluidd/plus4-grease.patch: a read-only QIDI Box card on the dashboard, ported from Valve Oil's Fluidd
+#   * fluidd/plus4-grease.patch: a QIDI Box card on the dashboard, ported from Valve Oil's Fluidd
 #     (see fluidd/README.md).
 #   * Settings live in the Moonraker namespace "plus4_grease_fluidd" instead of "fluidd", so this Fluidd
 #     and QIDI's never overwrite each other's layout, macros or theme.
@@ -18,7 +18,7 @@
 # the same build output (fixed file times and order).
 set -eu
 TAG=${1:-v1.38.1}
-BUILD=${2:-2}
+BUILD=${2:-3}
 NAMESPACE=plus4_grease_fluidd
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 WORK=${WORK:-$(mktemp -d)/fluidd}

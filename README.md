@@ -16,7 +16,7 @@ If you want it, it also adds a current Fluidd on its own port next to QIDI's, wh
 
 It also brings read-only tools for finding out what a Plus 4 is doing: a speed test, a Klipper report that explains shutdowns like "Timer too close" and "Lost communication", and a comparison of your config with QIDI's stock one.
 
-The ideas come from [Valve Oil](https://github.com/thelegendtubaguy/valve-oil), which does this for QIDI's Max 4, Plus 5 and Smart 5. Plus4 Grease is a separate project, written for the Plus 4's older software: Klipper on Python 3.7, Debian 10, and the `mks` user. This is version 0.6.
+The ideas come from [Valve Oil](https://github.com/thelegendtubaguy/valve-oil), which does this for QIDI's Max 4, Plus 5 and Smart 5. Plus4 Grease is a separate project, written for the Plus 4's older software: Klipper on Python 3.7, Debian 10, and the `mks` user. This is version 0.7.
 
 ## Plus4 Grease vs stock QIDI
 
@@ -30,7 +30,7 @@ The ideas come from [Valve Oil](https://github.com/thelegendtubaguy/valve-oil), 
 | When Klipper stops ("Timer too close", "Lost communication") | QIDI's generic message | `tools/klipper_report.py` says what the numbers just before it point to and matches USB events, so a Box rebooted by a power flicker shows as one |
 | Board fan (optional, `--board-fan`) | full speed whenever X/Y are enabled or the chamber heater is on | follows the hottest of the X/Y drivers and the mainboard chip, 30% floor while busy, full speed if Klipper shuts down |
 | Chamber temperature (optional, `--balanced-chamber`) | the heater follows one thermistor | the heater follows an average of the toolhead chip and that thermistor; see [Optional changes](#optional-changes) |
-| Web page (optional, `fluidd install`) | QIDI's Fluidd v1.30.4 on port 80, with QIDI's Box panel | QIDI's stays on port 80, untouched; Fluidd v1.38.1 is added on port 81 with a read-only Box card, sent pre-compressed (a first visit downloads about 4.4 MB and the printer compresses nothing) |
+| Web page (optional, `fluidd install`) | QIDI's Fluidd v1.30.4 on port 80, with QIDI's Box panel | QIDI's stays on port 80, untouched; Fluidd v1.38.1 is added on port 81 with a Box card, sent pre-compressed (a first visit downloads about 4.4 MB and the printer compresses nothing) |
 | Firmware, Klipper, Moonraker, QIDI's Fluidd, touchscreen, Box software | QIDI's | unchanged |
 
 Probing itself is unchanged; only the travel between points is faster. The Plus 4's X/Y motors are open-loop, and Valve Oil's Plus 5 lost position at 565 mm/s, so the speed was measured first: on a tested Plus 4, `tools/speed_test.py` ran X/Y up to 500 mm/s at the full 20000 mm/s² over the probing area with no lost steps. 300 leaves room for printers that haven't been tested, and faster would save under 2 s more per full mesh.
@@ -73,13 +73,13 @@ Klipper shuts the printer down if the mean passes 80 °C or the sensors disagree
 QIDI's web page is Fluidd v1.30.4 with QIDI's Box panel added. `fluidd install` adds upstream Fluidd v1.38.1 next to it, on port 81, and leaves QIDI's exactly as it is on port 80. Open whichever you like: `http://<printer-ip>/` is QIDI's, `http://<printer-ip>:81/` is the new one. (Port 8080 is taken by the camera.)
 
 - **What's different:** eight Fluidd versions of fixes and features since QIDI's copy. It's also lighter on the printer: every file comes pre-compressed and nginx sends it as stored, the browser keeps the hashed files for good, and this page writes no nginx access log. The whole folder is 17 MB.
-- **The Box:** a Box card, ported from Valve Oil's Fluidd, shows each slot's filament and color, the Box's humidity and temperature, which slot is loaded, the hub and toolhead sensors, and a running or failed Box step with QIDI's error. It only shows: load, unload and drying are still on the touchscreen or QIDI's page.
+- **The Box:** a Box card, ported from Valve Oil's Fluidd, shows each slot's filament and color, the Box's humidity and temperature, which slot is loaded, the hub and toolhead sensors, and a running or failed Box step with QIDI's error. Its Load, Unload, Eject and Read RFID buttons send the same commands as QIDI's own page; drying is still on the touchscreen or QIDI's page.
 - **Settings:** it keeps its own (Moonraker namespace `plus4_grease_fluidd`), so the two pages never overwrite each other's layout. The first install copies QIDI Fluidd's settings across, so your theme, macros and layout carry over.
 - **Cameras** are passed through to QIDI's page, so the new one uses the same camera setup.
 
-**Install.** Get `plus4-grease-fluidd-v1.38.1-2.zip` onto the printer next to `install.sh` or in your home folder. It's attached to the release, or build it with `tools/build_fluidd.sh` on a computer. From your computer (PowerShell, in the folder with the zip):
+**Install.** Get `plus4-grease-fluidd-v1.38.1-3.zip` onto the printer next to `install.sh` or in your home folder. It's attached to the release, or build it with `tools/build_fluidd.sh` on a computer. From your computer (PowerShell, in the folder with the zip):
 ```
-scp plus4-grease-fluidd-v1.38.1-2.zip mks@<printer-ip>:~/
+scp plus4-grease-fluidd-v1.38.1-3.zip mks@<printer-ip>:~/
 ```
 Then on the printer:
 ```
@@ -153,7 +153,7 @@ What's known about the Plus 4's software and boards is in [docs/plus4-notes.md](
 
 Candidates, each needing a test on a Plus 4 before it ships:
 
-- Buttons for the new Fluidd's Box card (load, unload, RFID read, drying), added one at a time and each checked against what QIDI's own page sends on V2.1.1.
+- Box drying and Box settings (auto-reload, RFID auto-read) on the new Fluidd's Box card, checked against what QIDI's own page sends on V2.1.1.
 
 - On hold: saving the config in the background, as Valve Oil does. On a Beacon Plus 4, `tools/klipper_report.py` found no pause in Klipper's main loop during print start's config save (a Stats line every second throughout), so there's nothing to win there yet. A stock Plus 4's numbers would settle it for QIDI's `G29`.
 - Fixes for QIDI Box bugs on the Plus 4, such as its Box software looking for the filament list in the wrong folder (`/home/qidi`).
