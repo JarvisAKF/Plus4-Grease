@@ -323,6 +323,26 @@ class ReportTests(unittest.TestCase):
         self.assertIn("      logged before it: box_detect: box1 removed", out)
         self.assertIn("      USB 5.0 s before: a USB device (1d50/614e/100) disconnected on USB port 2-1.2.1.2", out)
 
+    def test_box_loss_restart_and_cancelled_print(self):
+        log = Log().add("Starting SD card print (position 0)").stats(5).add(
+            "Exiting SD card print (position 8066)\naction:cancel\nb'Got EOF when reading from device'\n"
+            "Updated new device path: /dev/serial/by-id/usb-Klipper_QIDI_BOX_V1_1.1.1_0123456789ABCDEF01234567-if00\n"
+            "webhooks client 281473754271136: Disconnected\nStarting Klippy...")
+        log.add("Start printer at Sat Nov 21 15:55:00 2026 (1795298100.0 3000.0)").stats(3)
+        out = log.run()
+        self.assertIn("A board's serial port closed under Klipper before this", out)
+        self.assertIn("A print was cancelled at file position 8066 before this.", out)
+        self.assertIn("usb-Klipper_QIDI_BOX_V1_1.1.1_<serial>-if00", out)
+        self.assertNotIn("0123456789ABCDEF01234567", out)
+        self.assertNotIn("webhooks client", out)
+        self.assertIn("stopped at file position 8066 (cancelled, or paused and not resumed)", out)
+
+    def test_shutdown_says_how_long_klipper_stayed_down(self):
+        log = Log().stats(5).add("Transition to shutdown state: Lost communication with MCU 'mcu_box1'")
+        log.add("Starting Klippy...\nStart printer at Sat Nov 21 18:00:00 2026 (1795305600.0 9000.0)").stats(2)
+        out = log.run()
+        self.assertIn("Klipper stayed shut down until it started again 2.3 h later", out)
+
     def test_low_memory_and_a_dry_queue(self):
         out = Log().stats(20, buffer=0.05, mem=30000).add(
             "Transition to shutdown state: MCU 'U_1' shutdown: Timer too close").run()

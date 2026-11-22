@@ -48,6 +48,14 @@ SHUTDOWN = re.compile(r"Transition to shutdown state: (.*)")
 MCU_CONFIG = re.compile(r"MCU '([^']+)' config: (.*)")
 TIMEOUT = re.compile(r"Timeout with MCU '([^']+)' \(eventtime=([\d.]+)\)")
 NAMED_MCU = re.compile(r"MCU '([^']+)'")
+# A USB serial path carries the board's serial number (usb-Klipper_QIDI_BOX_V1_1.1.1_<serial>-if00).
+SERIAL_IN_PATH = re.compile(r"(usb-[^\s'\"/]*?_)([0-9A-Fa-f]{8,})(-if\d+)")
+NOISE = ("webhooks client", "webhooks: registering remote method", "Tracked URL")
+
+
+def redact(line):
+    """Hide serial numbers in a log line before it's printed."""
+    return SERIAL_IN_PATH.sub(r"\1<serial>\3", line)
 
 
 def number(text):
@@ -161,6 +169,11 @@ class Scan(object):
 
     def _close_print(self, text, place=None):
         if self.last_print and self.last_print["end"] is None:
+            stopped = self.last_print.pop("stopped", None)
+            if stopped and text != "finished":
+                # It had already stopped (cancelled, or paused and never resumed) before this.
+                place, text = stopped[0], "stopped at file position {} (cancelled, or paused and not resumed)".format(
+                    stopped[1])
             self.last_print["end"], self.last_print["ended"] = place or self.place, text
 
     def read(self, index, handle):
@@ -216,6 +229,7 @@ class Scan(object):
                            and self.last_print["session"] is current)
                 if running and position > 0:
                     self.last_print["resumes"] += 1
+                    self.last_print.pop("stopped", None)
                 else:
                     self._close_print("a new print started before it finished", place=(index, offset - len(raw)))
                     self.last_print = {"session": current, "start": (index, offset), "end": None, "ended": None,
@@ -223,6 +237,11 @@ class Scan(object):
             elif line.startswith("Finished SD card print"):
                 if self.last_print and self.last_print["session"] is current:
                     self._close_print("finished")
+            elif line.startswith("Exiting SD card print"):
+                # A pause or a cancel. A resume comes back as 'Starting SD card print (position N)'.
+                if self.last_print and self.last_print["session"] is current and self.last_print["end"] is None:
+                    match = re.search(r"position (\d+)", line)
+                    self.last_print["stopped"] = ((index, offset), match.group(1) if match else "?")
             elif line.startswith("Transition to shutdown state: "):
                 text = line[len("Transition to shutdown state: "):].strip()
                 entries = [e for e in (parse_entry(r) for r in self.window) if e]
@@ -259,8 +278,17 @@ def start_reason(lines):
         return None, []
     cut = marks[0] if marks else len(lines)
     skip = ("=====", "Stats ", "Args:", "Git version", "CPU:", "Python:", "Start printer", "Loaded MCU", "MCU '")
-    before = [line[:150] for line in lines[:cut] if not line.startswith(skip)][-4:]
-    return reason, before
+    before = [redact(line)[:150] for line in lines[:cut] if not line.startswith(skip + NOISE)][-4:]
+    notes = []
+    if any("Got EOF when reading from device" in line for line in lines[:cut]):
+        notes.append("A board's serial port closed under Klipper before this (\"Got EOF\"): a USB board went away.")
+    stopped = [line for line in lines[:cut] if line.startswith("Exiting SD card print")]
+    if stopped:
+        position = re.search(r"position (\d+)", stopped[-1])
+        cancelled = any(line.strip().endswith("action:cancel") for line in lines[:cut])
+        notes.append("A print was {} at file position {} before this.".format(
+            "cancelled" if cancelled else "stopped", position.group(1) if position else "?"))
+    return reason, notes + before
 
 
 def scan(paths, progress=None):
@@ -645,7 +673,9 @@ def main(argv=None):
     if found:
         session = found["session"]
         summary = summarize(print_stats(paths, found), session)
-        ended = found["ended"] or "no finish line yet (still running, or cancelled)"
+        stopped = found.get("stopped")
+        ended = found["ended"] or ("stopped at file position {} (paused, or cancelled)".format(stopped[1])
+                                   if stopped else "no finish line yet (still running)")
         length = summary["seconds"]
         resumes = found.get("resumes", 0)
         report("Last print: started {}{}, {} of Stats{}, {}.".format(
@@ -663,7 +693,7 @@ def main(argv=None):
                 report("    {} to {}: {} s, peak {:.0f}%".format(
                     session.wall(start), session.wall(stop)[-12:], seconds, 100.0 * peak))
                 for line in lines or ["(nothing logged)"]:
-                    report("        " + line)
+                    report("        " + redact(line))
     else:
         report("No print in {}. The last {} s of Stats instead:".format(
             "these logs" if len(paths) > 1 else "this log", len(result.tail)))
@@ -678,7 +708,10 @@ def main(argv=None):
         report("  {}: {}".format(time.strftime("%b %d %H:%M:%S %Z", time.localtime(session.epoch)),
                                  session.reason or "how it started isn't in the log"))
         for line in session.before:
-            report("      logged before it: " + line)
+            if line.startswith(("A board's serial port", "A print was")):
+                report("      " + line)
+            else:
+                report("      logged before it: " + line)
         if usb_events:
             for event in [e for e in usb_events if session.epoch - 30 <= e.epoch <= session.epoch and
                           e.action != "start"]:
@@ -708,7 +741,14 @@ def main(argv=None):
     report("Shutdowns ({}, the last 5 shown):".format(len(shutdowns)))
     for session, (_, text, when, before) in shutdowns[-5:]:
         report("")
-        report("  {}: {}".format(session.wall(when) if when is not None else "at startup", text.splitlines()[0]))
+        report("  {}: {}".format(session.wall(when) if when is not None else "at startup",
+                                 redact(text.splitlines()[0])))
+        later = [s for s in sessions if s.started and session.epoch is not None and s.epoch > session.epoch]
+        if later and when is not None:
+            down = later[0].epoch - (session.epoch + when - session.mono)
+            report("    Klipper stayed shut down until it started again {} later ({}).".format(
+                "{:.0f} min".format(down / 60) if down < 5400 else "{:.1f} h".format(down / 3600),
+                time.strftime("%b %d %H:%M:%S %Z", time.localtime(later[0].epoch))))
         usb = usb_around(usb_events, session, when)
         for finding in explain(text, before, session, usb):
             report("    - " + finding)
