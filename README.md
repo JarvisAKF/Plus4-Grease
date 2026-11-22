@@ -1,6 +1,6 @@
 # Plus4 Grease
 
-Small, reversible improvements and diagnostic tools for the **QIDI Plus 4** on QIDI firmware **V2.1.1**, stock or converted to a Beacon probe.
+Small, reversible improvements and diagnostic tools for the **QIDI Plus 4** on QIDI firmware **V2.1.1**, stock or converted to a Beacon probe. Firmware 1.8.1 and 1.8.2 are accepted too, but not tested yet; see [On firmware 1.8.1 and 1.8.2](#on-firmware-181-and-182).
 
 > [!IMPORTANT]
 > Plus4 Grease is an unofficial, independent project. It is not made or supported by QIDI, and it is **not Valve Oil**. Valve Oil's author doesn't support the Plus 4, so please don't take Plus4 Grease problems to the Valve Oil Discord or issue tracker. Open an issue here instead.
@@ -16,7 +16,7 @@ If you want it, it also adds a current Fluidd on its own port next to QIDI's, wh
 
 It also brings read-only tools for finding out what a Plus 4 is doing: a speed test, a Klipper report that explains shutdowns like "Timer too close" and "Lost communication", and a comparison of your config with QIDI's stock one.
 
-The ideas come from [Valve Oil](https://github.com/thelegendtubaguy/valve-oil), which does this for QIDI's Max 4, Plus 5 and Smart 5. Plus4 Grease is a separate project, written for the Plus 4's older software: Klipper on Python 3.7, Debian 10, and the `mks` user. This is version 0.11.
+The ideas come from [Valve Oil](https://github.com/thelegendtubaguy/valve-oil), which does this for QIDI's Max 4, Plus 5 and Smart 5. Plus4 Grease is a separate project, written for the Plus 4's older software: Klipper on Python 3.7, Debian 10, and the `mks` user. This is version 0.12.
 
 ## Plus4 Grease vs stock QIDI
 
@@ -94,12 +94,12 @@ It checks the zip's SHA-256, unpacks it to `~/plus4-grease-fluidd`, adds the ngi
 
 ## How it stays safe
 
-- **It only edits QIDI's stock text.** Each change looks for QIDI's exact lines from V2.1.1 and applies only where it finds them, once, at the start of a line (so a line you've commented out doesn't count). If you've changed that part yourself, for example with a Beacon probe conversion, that change is skipped and your file is left as it is. The one exception is the probe speeds, and only when you ask with `--replace-own-speeds`. After the restart, install checks that Klipper really loaded the new speeds, since another included file can set them again.
+- **It only edits QIDI's stock text.** Each change looks for QIDI's exact lines from V2.1.1 (the same lines are in QIDI's 1.7.1 configs) and applies only where it finds them, once, at the start of a line (so a line you've commented out doesn't count). If you've changed that part yourself, for example with a Beacon probe conversion, that change is skipped and your file is left as it is. The one exception is the probe speeds, and only when you ask with `--replace-own-speeds`. After the restart, install checks that Klipper really loaded the new speeds, since another included file can set them again.
 - **Backups first.** Every file it changes is copied to `~/.plus4-grease/backups/` first.
 - **Klipper has to start.** After a change it restarts Klipper. If Klipper doesn't come back ready, it puts your files back by itself.
 - **Clean uninstall.** `uninstall` puts QIDI's lines back.
 - **Few system files.** Outside Klipper's config there's only the USB event log: a udev rule in `/etc/udev/rules.d/99-plus4-grease-usb.rules` and its script in `/usr/local/lib/plus4-grease/`, written with `sudo` and owned by root, since udev runs the script as root. `uninstall` removes both and leaves the log. If you add the new Fluidd, its nginx site file joins them; `fluidd remove` takes it out.
-- **It checks the printer.** It runs only on a Plus 4 (`/dev_info.txt` reads `QIDI@x-plus_4`) on firmware V2.1.1, as the `mks` user, and never while a print is running or paused.
+- **It checks the printer.** It runs only on a Plus 4 (`/dev_info.txt` reads `QIDI@x-plus_4`) on firmware V2.1.1, 1.8.2 or 1.8.1, as the `mks` user, and never while a print is running or paused.
 
 ## Install
 
@@ -147,13 +147,13 @@ All three only read; none changes a file.
 
 - **Speed test.** `python3 ~/plus4-grease/tools/speed_test.py` moves the toolhead over the probing area at rising speeds, staying out of QIDI's no-print zones, and re-homes after each to find where steps start getting lost. Results go to `~/plus4-grease-speed-test-<date>.txt`. Results from more printers help decide whether 300 mm/s can go higher; please share yours in an issue.
 - **Klipper report.** `python3 ~/plus4-grease/tools/klipper_report.py --all` reads `klippy.log` and the USB event log. It shows each board's chip and the motors it drives; how busy the boards, their serial links and the mainboard's Linux processor were during the last print; each Klipper start and what led to it; and for every shutdown ("Timer too close", "Lost communication", ...) what the numbers just before it point to: the Linux side stalling, a bad serial link, a board stepping too fast, a temperature reading out of range, or a board dropping off USB. Serial numbers are hidden.
-- **Config comparison.** `python3 ~/plus4-grease/tools/config_diff.py` compares your `printer.cfg`, `gcode_macro.cfg`, Box files and `moonraker.conf` with QIDI's stock V2.1.1 copies in `stock/plus4-2.1.1/`, section by section: what you added, removed and changed, macro bodies as a line diff, and the SAVE_CONFIG block. Plus4 Grease's own edits are taken out first. Serial numbers are hidden. The result is also saved to `~/plus4-grease-config-diff-<date>.txt`.
+- **Config comparison.** `python3 ~/plus4-grease/tools/config_diff.py` compares your `printer.cfg`, `gcode_macro.cfg`, Box files and `moonraker.conf` with QIDI's stock V2.1.1 copies in `stock/plus4-2.1.1/`, section by section: what you added, removed and changed, macro bodies as a line diff, and the SAVE_CONFIG block. Plus4 Grease's own edits are taken out first. Serial numbers are hidden. The result is also saved to `~/plus4-grease-config-diff-<date>.txt`. On 1.8.x it may also list a few lines QIDI changed in V2.1.1, such as the two sections at the end of `printer.cfg`, `ENABLE_ALL_SENSOR` and the arc resolution.
 
 What's known about the Plus 4's software and boards is in [docs/plus4-notes.md](docs/plus4-notes.md). `tools/collect_plus4.py` gathers the same information from a printer, read-only, with serial numbers removed.
 
 ## Help test on a stock Plus 4
 
-Everything here has run on one Plus 4 so far, with a Beacon probe conversion; [docs/testing.md](docs/testing.md) says what was tested where. If you have a stock Plus 4 on QIDI's V2.1.1, these help most, in this order, and none of them changes anything:
+Everything here has run on one Plus 4 so far, with a Beacon probe conversion; [docs/testing.md](docs/testing.md) says what was tested where. If you have a stock Plus 4 on QIDI's V2.1.1, 1.8.1 or 1.8.2, these help most, in this order, and none of them changes anything:
 
 ```
 bash ~/plus4-grease/install.sh install --dry-run
@@ -162,6 +162,16 @@ python3 ~/plus4-grease/tools/klipper_report.py
 ```
 
 Then, if you're happy to, `install`, a print, and `klipper_report.py` again. Open an issue with the output. The tools leave out serial numbers and passwords, but read what you paste first.
+
+### On firmware 1.8.1 and 1.8.2
+
+QIDI sent 1.8.1 and 1.8.2 only as online updates and never published their files, so they couldn't be checked directly. QIDI did publish the 1.7.1 configs that came before them, and every Plus4 Grease edit finds the same stock text there as in V2.1.1. What's expected on 1.8.x, from [docs/plus4-notes.md](docs/plus4-notes.md#firmware-18x):
+
+- **The config changes and `--box-dry`** should work as on V2.1.1. Box drying only reads things 1.7.1 already had (the Box heater, its humidity sensor, the slot sensors and the saved variables), and no filament's Box heat limit changed between them.
+- **The new Fluidd's Box card** should show the slots and run Load, Unload, Eject, Read RFID and Plus4 Grease's drying. 1.8.x runs an earlier build of QIDI's Box software than V2.1.1, so the card may not show drying started from the touchscreen.
+- **Moonraker:** QIDI's 1.7 and V2.1.1 Moonraker report the same API version, so the new Fluidd should connect. Untested.
+
+The installer prints a line saying the firmware is untested. A dry run (`install --dry-run`, `fluidd install --dry-run`) shows what applies before anything changes.
 
 ## What's next
 

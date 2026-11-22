@@ -141,12 +141,13 @@ class BoxDryTests(unittest.TestCase):
             self.assertEqual(klipper_command(name + " BOX=1"), name)
         self.assertEqual(klipper_command("PLUS4_BOX_DRY BOX=1"), "PLUS4")  # why 0.9.0's names never ran
 
-    def test_limits_match_qidis_v2_1_1_filament_list(self):
+    @staticmethod
+    def stock_limits(version):
         import os
         import re
         here = os.path.dirname(os.path.abspath(__file__))
         listed, current = {}, None
-        with open(os.path.join(here, "..", "stock", "plus4-2.1.1", "officiall_filas_list.cfg")) as handle:
+        with open(os.path.join(here, "..", "stock", "plus4-" + version, "officiall_filas_list.cfg")) as handle:
             for line in handle:
                 header = re.match(r"\[fila(\d+)\]", line)
                 if header:
@@ -154,9 +155,19 @@ class BoxDryTests(unittest.TestCase):
                 elif current is not None and "=" in line:
                     key, value = (part.strip() for part in line.split("=", 1))
                     listed.setdefault(current, {})[key] = value
-        expected = {fid: int(entry["box_max_temp"]) for fid, entry in listed.items()
-                    if entry.get("filament") and entry.get("box_max_temp", "").isdigit()}
-        self.assertEqual(Printer({}).macros["_GREASE_BOX_DRY_LIMITS"][1]["limits"], expected)
+        return {fid: int(entry["box_max_temp"]) for fid, entry in listed.items()
+                if entry.get("filament") and entry.get("box_max_temp", "").isdigit()}
+
+    def test_limits_match_qidis_v2_1_1_filament_list(self):
+        self.assertEqual(Printer({}).macros["_GREASE_BOX_DRY_LIMITS"][1]["limits"], self.stock_limits("2.1.1"))
+
+    def test_limits_agree_with_qidis_1_7_1_filament_list(self):
+        # 1.7.1 lists fewer filaments; every one it lists has the same Box limit as in V2.1.1.
+        limits = Printer({}).macros["_GREASE_BOX_DRY_LIMITS"][1]["limits"]
+        older = self.stock_limits("1.7.1")
+        self.assertTrue(older)
+        for fid, limit in older.items():
+            self.assertEqual(limits.get(fid), limit, "fila{}".format(fid))
 
     def test_pla_loaded_refuses_to_heat(self):
         printer = Printer({0: PLA_SILK, 1: ASA})

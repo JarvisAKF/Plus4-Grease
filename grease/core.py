@@ -14,7 +14,11 @@ from .edits import FEATURES, Edit
 MODEL_FILE = "/dev_info.txt"
 MODEL = "QIDI@x-plus_4"
 VERSION_FILE = "/root/xindi/version"
-SUPPORTED_SOC = ("V2.1.1",)
+# V2.1.1 is what Plus4 Grease is tested on. QIDI shipped 1.8.1 and 1.8.2 only as online updates, so their stock
+# files can't be checked; QIDI's published 1.7.1 configs before them and V2.1.1's after them have the same text
+# where every edit applies (docs/plus4-notes.md, "Firmware 1.8.x").
+SUPPORTED_SOC = ("V2.1.1", "V1.8.2", "V1.8.1")
+TESTED_SOC = "V2.1.1"
 
 
 class GreaseError(Exception):
@@ -47,8 +51,15 @@ def parse_soc_version(text):
     for line in text.splitlines():
         key, _, value = line.partition("=")
         if key.strip() == "soc":
-            return value.strip()
+            return normalize_soc(value)
     return None
+
+
+def normalize_soc(value):
+    """'V2.1.1' for 'V2.1.1', 'v2.1.1' or '2.1.1'; anything else as it was written."""
+    value = (value or "").strip()
+    match = re.match(r"^[Vv]?(\d+(?:\.\d+)+)$", value)
+    return "V" + match.group(1) if match else (value or None)
 
 
 def read_soc_version(runner=subprocess.run):
@@ -77,11 +88,20 @@ def check_identity(paths):
 
 def check_printer(paths, soc_version, any_firmware=False):
     check_identity(paths)
-    if soc_version not in SUPPORTED_SOC and not any_firmware:
+    if normalize_soc(soc_version) not in SUPPORTED_SOC and not any_firmware:
         raise GreaseError(
             "QIDI firmware {} isn't supported; Plus4 Grease is made for {}. Update the printer first. "
             "(--any-firmware skips this check; every change still applies only where QIDI's stock text "
             "is found.)".format(soc_version or "unknown", ", ".join(SUPPORTED_SOC)))
+
+
+def firmware_note(soc_version):
+    """A line to print on supported firmware Plus4 Grease hasn't been tested on; None otherwise."""
+    soc = normalize_soc(soc_version)
+    if soc in SUPPORTED_SOC and soc != TESTED_SOC:
+        return ("QIDI firmware {}. Plus4 Grease is tested on {}; {} should work the same, and each change "
+                "still applies only where QIDI's stock text is found.".format(soc, TESTED_SOC, soc))
+    return None
 
 
 # ------------------------------------------------------------------ edits

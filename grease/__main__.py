@@ -4,8 +4,8 @@ import os
 import sys
 
 from . import VERSION, fluidd
-from .core import (GreaseError, Paths, check_identity, check_printer, install, read_soc_version, status,
-                   uninstall)
+from .core import (GreaseError, Paths, check_identity, check_printer, firmware_note, install, read_soc_version,
+                   status, uninstall)
 from .klipper import Klipper
 
 
@@ -58,7 +58,11 @@ def main(argv=None):
             return 0
         check_identity(paths)
         report("Reading the firmware version (sudo asks for the mks password)...")
-        check_printer(paths, read_soc_version(), any_firmware=getattr(args, "any_firmware", False))
+        soc_version = read_soc_version()
+        check_printer(paths, soc_version, any_firmware=getattr(args, "any_firmware", False))
+        note = firmware_note(soc_version)
+        if note:
+            report(note)
         if args.command == "fluidd":
             if args.action == "remove":
                 return fluidd.uninstall(paths, report)

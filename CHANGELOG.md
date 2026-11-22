@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.0
+- Firmware 1.8.1 and 1.8.2 are accepted, for `install` and `fluidd install`, with a line saying they're untested. QIDI sent them only as online updates, so their files can't be checked. QIDI's published 1.7.1 configs before them have the same stock text as V2.1.1 wherever Plus4 Grease edits, so the edits should apply the same way on 1.8.x; [docs/plus4-notes.md](docs/plus4-notes.md#firmware-18x) has the comparison.
+- QIDI's stock 1.7.1 `printer.cfg`, `gcode_macro.cfg` and filament list are in `stock/plus4-1.7.1/`. Tests check that every change applies and reverts on them, and that every filament 1.7.1 lists has the same Box drying limit as in V2.1.1.
+- Corrected: NOTICE.md gave QIDI's Plus 4 repository as GPL v3; it's AGPL v3. NOTICE.md also now names the stock files in `stock/`.
+- The firmware version is read the same whether QIDI writes `V1.8.1`, `v1.8.1` or `1.8.1`.
+
 ## 0.11.0
 - Up to four Boxes: the Box card's slots, layout, climate, heater limits and drying, and the drying macros, each tested with one to four Boxes.
 - Box card (Fluidd build 9), with commands QIDI's touchscreen uses on V2.1.1, from qbdisplay's notes:

@@ -567,16 +567,62 @@ class PrinterCheckTests(unittest.TestCase):
         printer = Printer()
         try:
             with mock.patch("os.geteuid", return_value=1000):
-                with self.assertRaises(GreaseError):
-                    core.check_printer(printer.paths, "V1.8.2")
-                core.check_printer(printer.paths, "V1.8.2", any_firmware=True)
+                for version in ("V1.7.1", "V1.8.0", "V2.2.0", None):
+                    with self.assertRaises(GreaseError):
+                        core.check_printer(printer.paths, version)
+                core.check_printer(printer.paths, "V1.7.1", any_firmware=True)
                 core.check_printer(printer.paths, "V2.1.1")
         finally:
             printer.cleanup()
 
+    def test_accepts_1_8_1_and_1_8_2(self):
+        printer = Printer()
+        try:
+            with mock.patch("os.geteuid", return_value=1000):
+                for version in ("V1.8.1", "V1.8.2", "v1.8.1", "1.8.2"):
+                    core.check_printer(printer.paths, version)
+        finally:
+            printer.cleanup()
+
+    def test_notes_untested_firmware(self):
+        self.assertIsNone(core.firmware_note("V2.1.1"))
+        self.assertIsNone(core.firmware_note("V1.7.1"))
+        self.assertIn("tested on V2.1.1", core.firmware_note("V1.8.1"))
+        self.assertIn("V1.8.2 should work", core.firmware_note("1.8.2"))
+
     def test_reads_qidis_version_file(self):
         text = "[version]\nmcu             = V0.12.0\nui              = V211\nsoc             = V2.1.1"
         self.assertEqual(core.parse_soc_version(text), "V2.1.1")
+        self.assertEqual(core.parse_soc_version("soc = v1.8.1\n"), "V1.8.1")
+        self.assertEqual(core.parse_soc_version("mcu = V0.12.0\n"), None)
+
+
+class OlderStockTests(unittest.TestCase):
+    """QIDI didn't publish 1.8.1 or 1.8.2. Its published 1.7.1 configs came before them, and every edit has to
+    find the same stock text there as in V2.1.1."""
+
+    def texts(self):
+        texts = {}
+        for name in ("printer.cfg", "gcode_macro.cfg"):
+            with open(os.path.join(HERE, "..", "stock", "plus4-1.7.1", name), "r", encoding="utf-8",
+                      newline="") as handle:
+                texts[name] = handle.read()
+        return texts
+
+    def test_every_change_is_available_on_stock_1_7_1(self):
+        texts = self.texts()
+        for feature in FEATURES:
+            self.assertEqual(core.feature_status(texts, feature), "available", feature.id)
+
+    def test_every_change_applies_and_reverts_on_stock_1_7_1(self):
+        original = self.texts()
+        for feature in FEATURES:
+            texts = dict(original)
+            core.apply_feature(texts, feature)
+            self.assertEqual(core.feature_status(texts, feature), "applied", feature.id)
+            core.revert_feature(texts, feature)
+            for name in original:
+                self.assertEqual(texts[name], original[name], feature.id)
 
 
 if __name__ == "__main__":
