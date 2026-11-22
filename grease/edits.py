@@ -15,10 +15,56 @@ import collections
 Edit = collections.namedtuple("Edit", "file find replace")
 # setting: the one option a feature sets, for printers where someone set it by hand (install
 # --replace-own-speeds). None for features that only make their exact text edits.
-Feature = collections.namedtuple("Feature", "id title detail source edits setting", defaults=(None,))
+# files: ((name, text), ...) a feature creates in the config folder and uninstall removes.
+# option: the install switch (--board-fan) that turns on a change left off by default.
+Feature = collections.namedtuple("Feature", "id title detail source edits setting files option",
+                                 defaults=(None, None, None))
 Setting = collections.namedtuple("Setting", "file section option value")
 
 PROBE_MOVE_SPEED = 300
+BOARD_FAN_FILE = "plus4-grease-board-fan.cfg"
+BOARD_FAN_CFG = r'''# Plus4 Grease: temperature-driven mainboard fan for the QIDI Plus 4 (install --board-fan).
+# From JarvisAKF's Plus 4, where it has run for over a year. It replaces QIDI's [controller_fan board_fan],
+# which runs the fan at full speed whenever X/Y are enabled or the chamber heater is on.
+# `bash ~/plus4-grease/install.sh uninstall` puts QIDI's fan back and removes this file.
+
+[fan_generic board_fan]
+pin: U_1:PC4
+max_power: 1.0
+shutdown_speed: 1.0        # full blast on Klipper shutdown, same as stock
+cycle_time: 0.01
+kick_start_time: 0.5
+off_below: 0.15
+
+# Mainboard STM32 temp. Stock [temperature_sensor GD32] reads 'mcu' (ttyS2),
+# which is the toolhead board (extruder/ADXL/part fan live there), not the mainboard.
+[temperature_sensor mainboard_mcu]
+sensor_type: temperature_mcu
+sensor_mcu: U_1
+
+[delayed_gcode _BOARD_FAN_LOOP]
+initial_duration: 5
+gcode:
+  # --- tuning knobs ---
+  {% set drv_lo = 60.0 %}      # X/Y TMC2240 die temp where fan starts ramping
+  {% set drv_hi = 70.0 %}      # X/Y TMC2240 die temp for 100%
+  {% set mcu_lo = 45.0 %}      # mainboard MCU temp where fan starts ramping
+  {% set mcu_hi = 65.0 %}      # mainboard MCU temp for 100%
+  {% set floor  = 0.30 %}      # minimum speed while X/Y enabled or chamber heating
+  # --- inputs (TMC2240 temp is null while the driver is disabled -> 0) ---
+  {% set tx = printer["tmc2240 stepper_x"].temperature or 0 %}
+  {% set ty = printer["tmc2240 stepper_y"].temperature or 0 %}
+  {% set tm = printer["temperature_sensor mainboard_mcu"].temperature %}
+  # --- proportional ramp, take the hottest demand ---
+  {% set s_drv = ([tx, ty]|max - drv_lo) / (drv_hi - drv_lo) %}
+  {% set s_mcu = (tm - mcu_lo) / (mcu_hi - mcu_lo) %}
+  {% set spd = [s_drv, s_mcu, 0.0]|max %}
+  {% set en = printer.stepper_enable.steppers %}
+  {% set busy = en.stepper_x or en.stepper_y or printer["heater_generic chamber"].target > 0 %}
+  {% if busy %}{% set spd = [spd, floor]|max %}{% endif %}
+  SET_FAN_SPEED FAN=board_fan SPEED={"%.2f" % ([spd, 1.0]|min)}
+  UPDATE_DELAYED_GCODE ID=_BOARD_FAN_LOOP DURATION=5
+'''
 
 FEATURES = (
     Feature(
@@ -148,5 +194,102 @@ FEATURES = (
             ),
         ),
         setting=Setting("printer.cfg", "bed_mesh", "speed", PROBE_MOVE_SPEED),
+    ),
+    Feature(
+        id="board_fan",
+        title="Board fan: driven by the X/Y driver and mainboard chip temperatures (install --board-fan)",
+        detail=(
+            "QIDI's [controller_fan board_fan] runs the mainboard fan at full speed whenever X/Y are enabled or "
+            "the chamber heater is on. This replaces it with a fan that follows the hottest of the X/Y TMC2240 "
+            "drivers (ramping from 60 to 70 C) and the mainboard chip (45 to 65 C), with a 30% floor while X/Y "
+            "or the chamber heater are on, and full speed if Klipper shuts down. Checked every 5 s."
+        ),
+        source="JarvisAKF's Plus 4 board_fan.cfg, run for over a year.",
+        edits=(
+            Edit(
+                file="printer.cfg",
+                find=(
+                    "[controller_fan board_fan]\n"
+                    "pin:U_1:PC4\n"
+                    "max_power:1.0\n"
+                    "shutdown_speed:1.0\n"
+                    "cycle_time:0.01\n"
+                    "fan_speed: 1.0\n"
+                    "heater:chamber\n"
+                    "stepper:stepper_x,stepper_y\n"
+                ),
+                replace=(
+                    "# Plus4 Grease (--board-fan): QIDI's board fan (controller_fan board_fan) is replaced\n"
+                    "# by a temperature-driven fan in {}.\n"
+                    "[include {}]\n"
+                ).format(BOARD_FAN_FILE, BOARD_FAN_FILE),
+            ),
+        ),
+        files=((BOARD_FAN_FILE, BOARD_FAN_CFG),),
+        option="board-fan",
+    ),
+    Feature(
+        id="balanced_chamber",
+        title="Chamber: heater follows an average of the toolhead chip and chamber thermistor (install --balanced-chamber)",
+        detail=(
+            "QIDI's chamber heater follows its chamber thermistor alone. This makes it follow the mean of the "
+            "toolhead board's chip temperature (GD32, counted 3 times) and that thermistor (now "
+            "[temperature_sensor chamber_probe], counted once), raises max_power from 0.4 to 0.6 and max_temp "
+            "from 70 to 80 C as an overshoot buffer, and drops QIDI's 45-65 C target range and its raising of "
+            "the bed to chamber + 25 C. Klipper shuts down if the mean passes 80 C or the sensors disagree by "
+            "more than 70 C. QIDI's Chamber_Thermal_Protection_Sensor is left as it is and still shuts the "
+            "printer down at 140 C."
+        ),
+        source="JarvisAKF's Plus 4 chamber setup, run for over a year at 65 C chamber targets.",
+        edits=(
+            Edit(
+                file="printer.cfg",
+                find=(
+                    "[heater_generic chamber]\n"
+                    "heater_pin:U_1:PC8\n"
+                    "max_power:0.4\n"
+                    "sensor_type:NTC 100K MGB18-104F39050L32\n"
+                    "sensor_pin:U_1:PA1\n"
+                    "\n"
+                    "control = pid\n"
+                    "pid_Kp=63.418 \n"
+                    "pid_Ki=1.342 \n"
+                    "pid_Kd=749.125\n"
+                    "\n"
+                    "min_temp:-100\n"
+                    "max_temp:70\n"
+                    "target_min_temp:45\n"
+                    "target_max_temp:65\n"
+                    "heat_with_heater_bed:True\n"
+                    "heat_with_heater_bed_tem_add:25\n"
+                ),
+                replace=(
+                    "# Plus4 Grease (--balanced-chamber): the chamber heater follows the mean of the toolhead\n"
+                    "# board's chip temperature (GD32, counted 3 times) and QIDI's chamber thermistor (now\n"
+                    "# chamber_probe, counted once). QIDI's Chamber_Thermal_Protection_Sensor is unchanged.\n"
+                    "[temperature_sensor chamber_probe]\n"
+                    "sensor_type:NTC 100K MGB18-104F39050L32\n"
+                    "sensor_pin:U_1:PA1\n"
+                    "\n"
+                    "[heater_generic chamber]\n"
+                    "heater_pin:U_1:PC8\n"
+                    "max_power:0.6\n"
+                    "sensor_type: temperature_combined\n"
+                    "sensor_list: temperature_sensor GD32, temperature_sensor chamber_probe, "
+                    "temperature_sensor GD32, temperature_sensor GD32\n"
+                    "combination_method: mean\n"
+                    "maximum_deviation: 70\n"
+                    "\n"
+                    "control = pid\n"
+                    "pid_Kp=63.418 \n"
+                    "pid_Ki=1.342 \n"
+                    "pid_Kd=749.125\n"
+                    "\n"
+                    "min_temp:-100\n"
+                    "max_temp:80\n"
+                ),
+            ),
+        ),
+        option="balanced-chamber",
     ),
 )

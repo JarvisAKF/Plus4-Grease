@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
+- Optional `install --board-fan`: QIDI's `[controller_fan board_fan]` is replaced by `plus4-grease-board-fan.cfg`, a fan driven by the X/Y TMC2240 driver temperatures (60-70 °C) and the mainboard chip (45-65 °C, new `[temperature_sensor mainboard_mcu]`), with a 30% floor while X/Y are enabled or the chamber is heating and full speed on shutdown. From JarvisAKF's Plus 4.
+- Optional `install --balanced-chamber`: the chamber heater follows the mean of the toolhead chip (`GD32`, counted three times) and QIDI's chamber thermistor (now `[temperature_sensor chamber_probe]`), with `max_power` 0.6, `max_temp` 80 °C and a 70 °C sensor-deviation limit; QIDI's 45-65 °C target range and bed assist are dropped. QIDI's `Chamber_Thermal_Protection_Sensor` (140 °C) is left as it is. From JarvisAKF's Plus 4.
+- Plus4 Grease can now create a file in the config folder for a change and remove it on uninstall; a Klipper start failure removes it with the rest. A change that finds someone else's file there is left alone.
+- A stock block only counts where it starts a line, so a block whose first line was commented out (`#[controller_fan board_fan]`) is left alone.
 - New `tools/config_diff.py`: compares a printer's config with QIDI's stock V2.1.1 files, section by section, with Plus4 Grease's own edits taken out first and serial numbers hidden. The stock files now live in `stock/plus4-2.1.1/`, and the tests use them. An option Klipper's SAVE_CONFIG moved into the SAVE_CONFIG block (a re-tuned PID, say) shows as moved, with both values.
 - README: what Plus4 Grease is, how it differs from stock QIDI, and how the same Plus4 Grease works on stock and Beacon-converted printers, with what a Beacon conversion was seen to change.
 

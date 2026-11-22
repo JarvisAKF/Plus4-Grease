@@ -92,7 +92,7 @@ class ConfigDiffTests(unittest.TestCase):
         for feature in FEATURES:
             core.apply_feature(texts, feature)
         for name, text in texts.items():
-            self.write(name, text)
+            self.write(name, text)  # includes plus4-grease-board-fan.cfg
         paths = core.Paths(home=self.home)
         core.save_state(paths, {"applied": [f.id for f in FEATURES]})
         out = self.run_diff()

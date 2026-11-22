@@ -84,14 +84,43 @@ def check_printer(paths, soc_version, any_firmware=False):
 
 
 # ------------------------------------------------------------------ edits
+def occurrences(text, block):
+    """Where block appears starting at the beginning of a line. A block found in the middle of a line
+    (after a '#', say) doesn't count: that line is something else."""
+    found, start = [], 0
+    while True:
+        index = text.find(block, start)
+        if index < 0:
+            return found
+        if index == 0 or text[index - 1] == "\n":
+            found.append(index)
+        start = index + 1
+
+
+def swap(text, old, new):
+    """Replace the one line-start occurrence of old with new."""
+    index = occurrences(text, old)[0]
+    return text[:index] + new + text[index + len(old):]
+
+
 def feature_status(text_by_file, feature):
-    """'applied', 'available', or 'skipped' (the file isn't QIDI's stock text where it matters)."""
+    """'applied', 'available', or 'skipped' (the file isn't QIDI's stock text where it matters). A file the
+    feature creates counts as applied when it's there with the feature's text, available when it's not
+    there, and skipped when something else is there."""
     states = []
+    for name, content in feature.files or ():
+        text = text_by_file.get(name)
+        if text is None:
+            states.append("available")
+        elif text == content:
+            states.append("applied")
+        else:
+            return "skipped"
     for edit in feature.edits:
         text = text_by_file.get(edit.file)
         if text is None:
             return "skipped"
-        stock, ours = text.count(edit.find), text.count(edit.replace)
+        stock, ours = len(occurrences(text, edit.find)), len(occurrences(text, edit.replace))
         if ours == 1 and stock == 0:
             states.append("applied")
         elif stock == 1 and ours == 0:
@@ -107,12 +136,21 @@ def feature_status(text_by_file, feature):
 
 def apply_feature(text_by_file, feature):
     for edit in feature.edits:
-        text_by_file[edit.file] = text_by_file[edit.file].replace(edit.find, edit.replace, 1)
+        text_by_file[edit.file] = swap(text_by_file[edit.file], edit.find, edit.replace)
+    for name, content in feature.files or ():
+        text_by_file[name] = content
 
 
 def revert_feature(text_by_file, feature):
+    """None for a file the feature created: it's to be removed."""
     for edit in feature.edits:
-        text_by_file[edit.file] = text_by_file[edit.file].replace(edit.replace, edit.find, 1)
+        text_by_file[edit.file] = swap(text_by_file[edit.file], edit.replace, edit.find)
+    for name, _ in feature.files or ():
+        text_by_file[name] = None
+
+
+def touched(features):
+    return sorted({e.file for f in features for e in f.edits} | {n for f in features for n, _ in f.files or ()})
 
 
 def own_setting_edit(text, setting):
@@ -162,7 +200,7 @@ def own_setting_edit(text, setting):
 
 def read_files(paths):
     texts = {}
-    for name in sorted({e.file for f in FEATURES for e in f.edits}):
+    for name in touched(FEATURES):
         try:
             with open(paths.config_file(name), "r", encoding="utf-8", newline="") as handle:
                 texts[name] = handle.read()
@@ -179,7 +217,10 @@ def write_file(path, text):
         handle.write(text)
         handle.flush()
         os.fsync(handle.fileno())
-    shutil.copymode(path, temp)
+    if os.path.exists(path):
+        shutil.copymode(path, temp)
+    else:
+        os.chmod(temp, 0o644)
     os.replace(temp, path)
     directory = os.open(os.path.dirname(path), os.O_RDONLY)
     try:
@@ -193,16 +234,31 @@ def backup(paths, names):
     folder = os.path.join(paths.backups, stamp)
     os.makedirs(folder, exist_ok=True)
     for name in names:
-        shutil.copy2(paths.config_file(name), os.path.join(folder, name))
+        if os.path.exists(paths.config_file(name)):
+            shutil.copy2(paths.config_file(name), os.path.join(folder, name))
     return folder
 
 
+def write_changes(paths, texts, names):
+    """Write each file; None removes it."""
+    for name in names:
+        path = paths.config_file(name)
+        if texts.get(name) is None:
+            if os.path.exists(path):
+                os.unlink(path)
+        else:
+            write_file(path, texts[name])
+
+
 def restore(paths, folder, names):
+    """Put the backed-up files back; a file that wasn't there at backup time is removed."""
     for name in names:
         source = os.path.join(folder, name)
         if os.path.isfile(source):
             with open(source, "r", encoding="utf-8", newline="") as handle:
                 write_file(paths.config_file(name), handle.read())
+        elif os.path.exists(paths.config_file(name)):
+            os.unlink(paths.config_file(name))
 
 
 def load_state(paths):
@@ -234,13 +290,16 @@ def effective(feature, state):
     return feature
 
 
-def plan(paths, replace_own=False):
+def plan(paths, replace_own=False, options=()):
+    """Rows for every feature. An opt-in feature that could apply but wasn't asked for is 'optional'."""
     texts = read_files(paths)
     state = load_state(paths)
     rows = []
     for feature in FEATURES:
         current = effective(feature, state)
         status_now = feature_status(texts, current)
+        if status_now == "available" and feature.option and feature.option not in options:
+            status_now = "optional"
         note, replaceable, replacing = "", False, False
         if status_now == "skipped" and feature.setting and feature.setting.file in texts:
             edit, note = own_setting_edit(texts[feature.setting.file], feature.setting)
@@ -300,14 +359,16 @@ def mark_applied(paths, feature_id, on):
     save_state(paths, state)
 
 
-def install(paths, klipper, report, dry_run=False, replace_own=False, runner=None, root=None):
-    texts, rows = plan(paths, replace_own)
+def install(paths, klipper, report, dry_run=False, replace_own=False, runner=None, root=None, options=()):
+    texts, rows = plan(paths, replace_own, options)
     todo = [row for row in rows if row.status == "available"]
     usb = system.status(paths, root)
     for row in rows:
         report("  {:9}  {}".format(row.status, row.feature.title))
         if row.replacing:
             report("             Replacing your {}; uninstall puts it back.".format(row.note))
+        elif row.status == "optional":
+            report("             Off unless you ask: add --{} to install it.".format(row.feature.option))
         elif row.status == "skipped":
             report("             " + skip_reason(row))
     report_usb(usb, report)
@@ -329,13 +390,12 @@ def install(paths, klipper, report, dry_run=False, replace_own=False, runner=Non
             report("Done. Applied: usb_event_log.")
             return 0
     klipper.require_idle()
-    names = sorted({e.file for row in todo for e in row.feature.edits})
+    names = touched([row.feature for row in todo])
     folder = backup(paths, names)
-    report("Backed up {} to {}".format(", ".join(names), folder))
+    report("Backed up {} to {}".format(", ".join(n for n in names if texts.get(n) is not None), folder))
     for row in todo:
         apply_feature(texts, row.feature)
-    for name in names:
-        write_file(paths.config_file(name), texts[name])
+    write_changes(paths, texts, names)
     state = load_state(paths)
     applied = sorted(set(state.get("applied", [])) | {row.feature.id for row in todo})
     own_values = dict(state.get("own_values", {}))
@@ -390,15 +450,14 @@ def uninstall(paths, klipper, report, runner=None, root=None):
         save_state(paths, {"version": VERSION, "applied": []})
         return 0
     klipper.require_idle()
-    names = sorted({e.file for f in todo for e in f.edits})
+    names = touched(todo)
     folder = backup(paths, names)
     own = state.get("own_values", {})
     for feature in todo:
         revert_feature(texts, feature)
         was = own.get(feature.id, {}).get("was")
         report("  removed    {}{}".format(feature.title, " (yours is back: {})".format(was) if was else ""))
-    for name in names:
-        write_file(paths.config_file(name), texts[name])
+    write_changes(paths, texts, names)
     save_state(paths, {"version": VERSION, "applied": [], "last_backup": folder})
     report("Restarting Klipper...")
     if not klipper.restart_and_wait():
@@ -417,6 +476,8 @@ def status(paths, report, root=None):
             note = " (was applied; a QIDI update probably replaced the file, so install again)"
         elif row.status == "applied" and row.feature.id in state.get("own_values", {}):
             note = " (replacing your {})".format(state["own_values"][row.feature.id]["was"])
+        elif row.status == "optional":
+            note = "\n             Off unless you ask: install --{} adds it.".format(row.feature.option)
         elif row.status == "skipped":
             note = "\n             " + skip_reason(row)
         report("  {:9}  {}{}".format(row.status, row.feature.title, note))

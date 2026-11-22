@@ -163,9 +163,13 @@ def undo_grease(texts, config):
     except Exception:  # noqa: BLE001 - run without Plus4 Grease installed
         return texts, []
     home = os.path.dirname(os.path.dirname(os.path.abspath(config)))  # <home>/printer_data/config
-    state = core.load_state(core.Paths(home=home))
+    paths = core.Paths(home=home)
+    state = core.load_state(paths)
     taken = []
     texts = dict(texts)
+    for name in core.touched(core.FEATURES):
+        if name not in texts and os.path.isfile(paths.config_file(name)):
+            texts[name] = read(paths.config_file(name))
     for feature in core.FEATURES:
         current = core.effective(feature, state)
         if all(edit.file in texts for edit in current.edits) and core.feature_status(texts, current) == "applied":

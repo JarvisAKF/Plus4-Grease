@@ -14,7 +14,7 @@ Plus4 Grease is an add-on for QIDI's own software on the Plus 4. It keeps QIDI's
 
 It also brings read-only tools for finding out what a Plus 4 is doing: a speed test, a Klipper report that explains shutdowns like "Timer too close" and "Lost communication", and a comparison of your config with QIDI's stock one.
 
-The ideas come from [Valve Oil](https://github.com/thelegendtubaguy/valve-oil), which does this for QIDI's Max 4, Plus 5 and Smart 5. Plus4 Grease is a separate project, written for the Plus 4's older software: Klipper on Python 3.7, Debian 10, and the `mks` user. This is version 0.3.
+The ideas come from [Valve Oil](https://github.com/thelegendtubaguy/valve-oil), which does this for QIDI's Max 4, Plus 5 and Smart 5. Plus4 Grease is a separate project, written for the Plus 4's older software: Klipper on Python 3.7, Debian 10, and the `mks` user. This is version 0.4.
 
 ## Plus4 Grease vs stock QIDI
 
@@ -26,6 +26,8 @@ The ideas come from [Valve Oil](https://github.com/thelegendtubaguy/valve-oil), 
 | Bed mesh: travel between probe points | 150 mm/s | 300 mm/s; a full 9×9 mesh spends about 8 s less moving |
 | USB devices connecting and disconnecting | only in Linux's log, which the Plus 4 keeps in RAM and loses when switched off | also in `~/printer_data/logs/plus4-grease-usb.log` on the eMMC, without serial numbers |
 | When Klipper stops ("Timer too close", "Lost communication") | QIDI's generic message | `tools/klipper_report.py` says what the numbers just before it point to and matches USB events, so a Box rebooted by a power flicker shows as one |
+| Board fan (optional, `--board-fan`) | full speed whenever X/Y are enabled or the chamber heater is on | follows the hottest of the X/Y drivers and the mainboard chip, 30% floor while busy, full speed if Klipper shuts down |
+| Chamber temperature (optional, `--balanced-chamber`) | the heater follows one thermistor | the heater follows an average of the toolhead chip and that thermistor; see [Optional changes](#optional-changes) |
 | Firmware, Klipper, Moonraker, Fluidd, touchscreen, Box software | QIDI's | unchanged |
 
 Probing itself is unchanged; only the travel between points is faster. The Plus 4's X/Y motors are open-loop, and Valve Oil's Plus 5 lost position at 565 mm/s, so the speed was measured first: on a tested Plus 4, `tools/speed_test.py` ran X/Y up to 500 mm/s at the full 20000 mm/s² over the probing area with no lost steps. 300 leaves room for printers that haven't been tested, and faster would save under 2 s more per full mesh.
@@ -40,6 +42,7 @@ There is one Plus4 Grease for both. Each change looks for QIDI's exact stock tex
 | Bed mesh save after 0.5 s | applies | skipped: the conversion's `G29` is its own |
 | Z tilt and bed mesh at 300 mm/s | applies | a conversion usually sets its own speeds, so these are skipped unless you run `install --replace-own-speeds`, which sets them to 300 too and keeps a note of yours for `uninstall`. With a Beacon, the bed mesh speed is also its scan speed. |
 | USB event log and the tools | applies | applies |
+| `--board-fan`, `--balanced-chamber` | apply when asked | apply when asked, where the conversion left QIDI's board fan or chamber heater as QIDI wrote them |
 
 What one Beacon conversion was seen to change, as `tools/config_diff.py` showed it (conversions differ; check yours the same way):
 
@@ -49,9 +52,22 @@ What one Beacon conversion was seen to change, as `tools/config_diff.py` showed 
 
 `install --dry-run` shows which changes apply on your printer before anything is touched. So far Plus4 Grease has been tested on a Beacon-converted Plus 4 with one Box; see [docs/testing.md](docs/testing.md). Results from a stock Plus 4 are wanted, especially for the bed mesh save change and the 300 mm/s probe travel with QIDI's own probe. `tools/config_diff.py` lists everything a printer's config changes from QIDI's stock one, which is a quick way to see what a conversion touched.
 
+## Optional changes
+
+Two changes are off unless you ask for them, because they change how a fan and a heater are controlled. Both come from [JarvisAKF](https://github.com/JarvisAKF)'s own Plus 4, where they've run for over a year. Add the switches to `install` (and to `install --dry-run` to see them first); `uninstall` takes them out with everything else.
+
+**`--board-fan`: a temperature-driven board fan.** QIDI's `[controller_fan board_fan]` runs the mainboard fan at full speed whenever X/Y are enabled or the chamber heater is on. This replaces it with `plus4-grease-board-fan.cfg`: every 5 s the fan is set from the hottest of the X/Y TMC2240 drivers (ramping from 60 to 70 °C) and the mainboard's own chip (45 to 65 °C, a new `[temperature_sensor mainboard_mcu]`), with a 30% floor while X/Y are enabled or the chamber is heating, and full speed if Klipper shuts down. QIDI's `GD32` sensor isn't used for this: it reads the toolhead board's chip, not the mainboard's.
+
+**`--balanced-chamber`: a chamber reading that isn't one thermistor.** QIDI's chamber heater follows a single thermistor. With this, it follows the mean of the toolhead board's chip temperature (`GD32`, counted three times) and that thermistor (now `[temperature_sensor chamber_probe]`, counted once), so the reading reflects the toolhead as well as the air at that one thermistor. It also:
+
+- raises `max_power` from 0.4 to 0.6 and `max_temp` from 70 to 80 °C, an overshoot buffer: a 65 °C target can read 70–72 °C on the way;
+- drops QIDI's 45–65 °C range for chamber targets and QIDI's raising of the bed to chamber + 25 °C when the chamber heats.
+
+Klipper shuts the printer down if the mean passes 80 °C or the sensors disagree by more than 70 °C, which catches a thermistor that fails open or shorted. QIDI's own `Chamber_Thermal_Protection_Sensor` at the heater is left as it is and still shuts the printer down at 140 °C. PID values are QIDI's; run `PID_CALIBRATE HEATER=chamber TARGET=60` afterwards if the chamber overshoots more than you like.
+
 ## How it stays safe
 
-- **It only edits QIDI's stock text.** Each change looks for QIDI's exact lines from V2.1.1 and applies only where it finds them, once. If you've changed that part yourself, for example with a Beacon probe conversion, that change is skipped and your file is left as it is. The one exception is the probe speeds, and only when you ask with `--replace-own-speeds`. After the restart, install checks that Klipper really loaded the new speeds, since another included file can set them again.
+- **It only edits QIDI's stock text.** Each change looks for QIDI's exact lines from V2.1.1 and applies only where it finds them, once, at the start of a line (so a line you've commented out doesn't count). If you've changed that part yourself, for example with a Beacon probe conversion, that change is skipped and your file is left as it is. The one exception is the probe speeds, and only when you ask with `--replace-own-speeds`. After the restart, install checks that Klipper really loaded the new speeds, since another included file can set them again.
 - **Backups first.** Every file it changes is copied to `~/.plus4-grease/backups/` first.
 - **Klipper has to start.** After a change it restarts Klipper. If Klipper doesn't come back ready, it puts your files back by itself.
 - **Clean uninstall.** `uninstall` puts QIDI's lines back.

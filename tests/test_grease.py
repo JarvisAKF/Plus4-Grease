@@ -22,7 +22,9 @@ def no_real_commands(command, **kwargs):
 # Nothing in these tests may touch the real /etc or run sudo. Printer() swaps in a scratch root and a fake.
 system.ROOT = tempfile.mkdtemp(prefix="plus4-grease-no-root-")
 system.RUNNER = no_real_commands
-ALL_IDS = sorted([f.id for f in FEATURES] + ["usb_event_log"])
+DEFAULTS = [f for f in FEATURES if not f.option]
+OPT_INS = [f for f in FEATURES if f.option]
+ALL_IDS = sorted([f.id for f in DEFAULTS] + ["usb_event_log"])
 
 
 class FakeSudo(object):
@@ -135,11 +137,20 @@ class EditTests(unittest.TestCase):
         for feature in FEATURES:
             for edit in feature.edits:
                 self.assertEqual(texts[edit.file].count(edit.find), 1, feature.id)
+                self.assertEqual(len(core.occurrences(texts[edit.file], edit.find)), 1, feature.id)
                 self.assertEqual(texts[edit.file].count(edit.replace), 0, feature.id)
+
+    def test_a_block_in_the_middle_of_a_line_doesnt_count(self):
+        self.assertEqual(core.occurrences("a\n#[x]\ny\n[x]\ny\n", "[x]\ny\n"), [9])
+        texts = stock_texts()
+        texts["printer.cfg"] = texts["printer.cfg"].replace("[controller_fan board_fan]\n",
+                                                            "#[controller_fan board_fan]\n")
+        self.assertEqual(core.feature_status(texts, [f for f in FEATURES if f.id == "board_fan"][0]),
+                         "skipped")
 
     def test_macro_changes_only_trim_dwells(self):
         texts = stock_texts()
-        for feature in FEATURES:
+        for feature in DEFAULTS:
             core.apply_feature(texts, feature)
         before, after = stock_text().splitlines(), texts["gcode_macro.cfg"].splitlines()
         removed = [line for line in before if line not in after]
@@ -149,7 +160,7 @@ class EditTests(unittest.TestCase):
 
     def test_printer_cfg_changes_only_the_z_tilt_and_bed_mesh_speeds(self):
         texts = stock_texts()
-        for feature in FEATURES:
+        for feature in DEFAULTS:
             core.apply_feature(texts, feature)
         before, after = stock_text("printer.cfg").splitlines(), texts["printer.cfg"].splitlines()
         self.assertEqual(len(before), len(after))
@@ -170,7 +181,7 @@ class EditTests(unittest.TestCase):
             self.assertEqual(core.feature_status(texts, feature), "applied")
         for feature in FEATURES:
             core.revert_feature(texts, feature)
-        self.assertEqual(texts, stock_texts())
+        self.assertEqual({n: t for n, t in texts.items() if t is not None}, stock_texts())
 
     def test_own_probe_speed_is_left_alone(self):
         texts = stock_texts()
@@ -324,6 +335,87 @@ class InstallTests(unittest.TestCase):
         core.install(self.printer.paths, klipper, self.printer.report)
         self.assertEqual(self.printer.macro_text(), after_first)
         self.assertEqual(klipper.restarts, 0)
+
+
+class OptInTests(unittest.TestCase):
+    def setUp(self):
+        self.printer = Printer()
+
+    def tearDown(self):
+        self.printer.cleanup()
+
+    def fan_file(self):
+        return self.printer.paths.config_file("plus4-grease-board-fan.cfg")
+
+    def test_off_unless_asked(self):
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report)
+        applied = core.load_state(self.printer.paths)["applied"]
+        self.assertNotIn("board_fan", applied)
+        self.assertNotIn("balanced_chamber", applied)
+        self.assertFalse(os.path.exists(self.fan_file()))
+        self.assertTrue(any("Off unless you ask: add --board-fan" in line for line in self.printer.lines))
+        self.printer.lines = []
+        core.status(self.printer.paths, self.printer.report)
+        self.assertTrue(any(line.startswith("  optional") and "Board fan" in line for line in self.printer.lines))
+
+    def test_board_fan_in_and_out(self):
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, options=["board-fan"])
+        text = self.printer.text("printer.cfg")
+        self.assertNotIn("\n[controller_fan board_fan]\n", text)
+        self.assertNotIn("[controller_fan board_fan]", text)
+        self.assertIn("\n[include plus4-grease-board-fan.cfg]\n", text)
+        with open(self.fan_file()) as handle:
+            fan = handle.read()
+        self.assertIn("[fan_generic board_fan]\npin: U_1:PC4\n", fan)
+        self.assertIn("[delayed_gcode _BOARD_FAN_LOOP]", fan)
+        self.assertIn("sensor_mcu: U_1", fan)
+        self.assertIn("board_fan", core.load_state(self.printer.paths)["applied"])
+        core.uninstall(self.printer.paths, FakeKlipper(), self.printer.report)
+        self.assertFalse(os.path.exists(self.fan_file()))
+        self.assertEqual(self.printer.text("printer.cfg"), stock_text("printer.cfg"))
+
+    def test_balanced_chamber_in_and_out(self):
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, options=["balanced-chamber"])
+        text = self.printer.text("printer.cfg")
+        self.assertIn("[temperature_sensor chamber_probe]\nsensor_type:NTC 100K MGB18-104F39050L32\n"
+                      "sensor_pin:U_1:PA1\n", text)
+        self.assertIn("sensor_list: temperature_sensor GD32, temperature_sensor chamber_probe, "
+                      "temperature_sensor GD32, temperature_sensor GD32\n", text)
+        self.assertIn("max_power:0.6\n", text)
+        self.assertIn("max_temp:80\n", text)
+        for gone in ("target_min_temp", "target_max_temp", "heat_with_heater_bed"):
+            self.assertNotIn(gone, text)
+        self.assertIn("[temperature_sensor Chamber_Thermal_Protection_Sensor]\nsensor_type:NTC 100K "
+                      "MGB18-104F39050L32\nsensor_pin:U_1:PC2\nmin_temp:-100\nmax_temp:140\n", text)
+        self.assertEqual(text.count("[temperature_sensor GD32]"), 1)
+        core.uninstall(self.printer.paths, FakeKlipper(), self.printer.report)
+        self.assertEqual(self.printer.text("printer.cfg"), stock_text("printer.cfg"))
+
+    def test_klipper_failing_takes_the_new_file_away_too(self):
+        with self.assertRaises(GreaseError):
+            core.install(self.printer.paths, FakeKlipper(ready=False), self.printer.report,
+                         options=["board-fan", "balanced-chamber"])
+        self.assertFalse(os.path.exists(self.fan_file()))
+        self.assertEqual(self.printer.text("printer.cfg"), stock_text("printer.cfg"))
+
+    def test_someone_elses_fan_file_is_left_alone(self):
+        with open(self.fan_file(), "w") as handle:
+            handle.write("# mine\n")
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, options=["board-fan"])
+        with open(self.fan_file()) as handle:
+            self.assertEqual(handle.read(), "# mine\n")
+        self.assertIn("[controller_fan board_fan]", self.printer.text("printer.cfg"))
+
+    def test_a_printer_that_already_changed_them_is_skipped(self):
+        text = stock_text("printer.cfg").replace("max_power:0.4\n", "max_power:0.6\n").replace(
+            "[controller_fan board_fan]\n", "#[controller_fan board_fan]\n")
+        with open(self.printer.paths.config_file("printer.cfg"), "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report,
+                     options=["board-fan", "balanced-chamber"])
+        applied = core.load_state(self.printer.paths)["applied"]
+        self.assertNotIn("board_fan", applied)
+        self.assertNotIn("balanced_chamber", applied)
 
 
 class UsbLogTests(unittest.TestCase):

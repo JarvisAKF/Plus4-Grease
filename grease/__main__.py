@@ -17,6 +17,12 @@ def main(argv=None):
     run.add_argument("--replace-own-speeds", action="store_true",
                      help="also set the Z tilt and bed mesh speeds where you've set them yourself; "
                           "uninstall puts yours back")
+    run.add_argument("--board-fan", action="store_true",
+                     help="also replace QIDI's board fan with one driven by the X/Y driver and mainboard chip "
+                          "temperatures")
+    run.add_argument("--balanced-chamber", action="store_true",
+                     help="also make the chamber heater follow an average of the toolhead chip and the chamber "
+                          "thermistor (max_power 0.6, max_temp 80, no 45-65 C target range or bed assist)")
     run.add_argument("--any-firmware", action="store_true", help=argparse.SUPPRESS)
     sub.add_parser("uninstall", help="put QIDI's stock text back")
     sub.add_parser("status", help="show what's applied")
@@ -38,7 +44,10 @@ def main(argv=None):
         report("Reading the firmware version (sudo asks for the mks password)...")
         check_printer(paths, read_soc_version(), any_firmware=getattr(args, "any_firmware", False))
         if args.command == "install":
-            return install(paths, Klipper(), report, dry_run=args.dry_run, replace_own=args.replace_own_speeds)
+            options = [name for name, chosen in (("board-fan", args.board_fan),
+                                                 ("balanced-chamber", args.balanced_chamber)) if chosen]
+            return install(paths, Klipper(), report, dry_run=args.dry_run, replace_own=args.replace_own_speeds,
+                           options=options)
         return uninstall(paths, Klipper(), report)
     except GreaseError as error:
         report("Stopped: {}".format(error))
