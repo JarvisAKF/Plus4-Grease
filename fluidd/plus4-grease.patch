@@ -1,9 +1,9 @@
 diff --git a/src/components/widgets/qidiBox/QidiBoxCard.vue b/src/components/widgets/qidiBox/QidiBoxCard.vue
 new file mode 100644
-index 0000000..f00a7f8
+index 0000000..8d31c5b
 --- /dev/null
 +++ b/src/components/widgets/qidiBox/QidiBoxCard.vue
-@@ -0,0 +1,553 @@
+@@ -0,0 +1,586 @@
 +<template>
 +  <collapsable-card
 +    :title="$t('app.qidi_box.title.qidi_box')"
@@ -89,6 +89,24 @@ index 0000000..f00a7f8
 +            {{ overline }}
 +          </div>
 +          <v-spacer />
++          <v-tooltip top>
++            <template #activator="{ on, attrs }">
++              <app-btn
++                icon
++                small
++                :disabled="editDisabled"
++                :aria-label="$t('app.qidi_box.btn.edit_filament')"
++                v-bind="attrs"
++                v-on="on"
++                @click="editing = true"
++              >
++                <v-icon small>
++                  $pencil
++                </v-icon>
++              </app-btn>
++            </template>
++            <span>{{ $t('app.qidi_box.btn.edit_filament') }}</span>
++          </v-tooltip>
 +          <v-tooltip top>
 +            <template #activator="{ on, attrs }">
 +              <app-btn
@@ -220,6 +238,12 @@ index 0000000..f00a7f8
 +      </div>
 +    </div>
 +
++    <qidi-box-filament-dialog
++      v-if="editing"
++      v-model="editing"
++      :box-slot="current"
++      :busy="busy"
++    />
 +    <qidi-box-settings-dialog
 +      v-if="settingsOpen"
 +      v-model="settingsOpen"
@@ -249,6 +273,7 @@ index 0000000..f00a7f8
 +import QidiBoxFlow from './QidiBoxFlow.vue'
 +import QidiBoxSettingsDialog from './QidiBoxSettingsDialog.vue'
 +import QidiBoxDry from './QidiBoxDry.vue'
++import QidiBoxFilamentDialog from './QidiBoxFilamentDialog.vue'
 +
 +const [EJECT, LOAD, UNLOAD] = [0, 1, 2]
 +const COMMANDS = ['E_BOX', 'E_LOAD', 'E_UNLOAD']
@@ -263,7 +288,8 @@ index 0000000..f00a7f8
 +  components: {
 +    QidiBoxFlow,
 +    QidiBoxSettingsDialog,
-+    QidiBoxDry
++    QidiBoxDry,
++    QidiBoxFilamentDialog
 +  }
 +})
 +export default class QidiBoxCard extends Mixins(StateMixin, QidiBoxMixin) {
@@ -273,6 +299,7 @@ index 0000000..f00a7f8
 +
 +  selected = 0
 +  settingsOpen = false
++  editing = false
 +
 +  get boxCount (): number {
 +    return this.$typedGetters['qidiBox/getBoxCount']
@@ -445,6 +472,12 @@ index 0000000..f00a7f8
 +          ? this.$t('app.qidi_box.msg.plus4_heater_locked', { box }).toString()
 +          : this.$t('app.qidi_box.msg.plus4_heater_limit', { box, temp: limit }).toString()
 +      }))
++  }
++
++  // A slot's filament can be set by hand, for any spool, once QIDI's filament list has loaded; not while the Box or
++  // a print is busy, nor for an empty Box slot.
++  get editDisabled (): boolean {
++    return this.busy || this.$typedState.qidiBox.filamentList == null || (!this.currentExternal && !this.current.present)
 +  }
 +
 +  // Box commands run one at a time; a command's buttons stay off until Klipper answers it.
@@ -766,6 +799,160 @@ index 0000000..988032b
 +  grid-template-columns: repeat(3, minmax(90px, 1fr)) auto;
 +  gap: 8px;
 +  align-items: center;
++}
++</style>
+diff --git a/src/components/widgets/qidiBox/QidiBoxFilamentDialog.vue b/src/components/widgets/qidiBox/QidiBoxFilamentDialog.vue
+new file mode 100644
+index 0000000..5e01f63
+--- /dev/null
++++ b/src/components/widgets/qidiBox/QidiBoxFilamentDialog.vue
+@@ -0,0 +1,148 @@
++<template>
++  <app-dialog
++    v-model="open"
++    :title="$t('app.qidi_box.title.edit_slot', { slot: boxSlot.label })"
++    width="420"
++    :save-button-disabled="busy || draft.filament == null"
++    @save="handleSave"
++  >
++    <v-card-text class="pt-4">
++      <v-select
++        v-model="draft.vendor"
++        :items="vendors"
++        :label="$t('app.qidi_box.label.vendor')"
++        class="mb-3"
++        outlined
++        dense
++        hide-details
++      />
++      <v-select
++        v-model="draft.filament"
++        :items="filaments"
++        :label="$t('app.qidi_box.label.filament')"
++        class="mb-3"
++        outlined
++        dense
++        hide-details
++      />
++      <div class="text-caption text--secondary mb-1">
++        {{ $t('app.qidi_box.label.color') }}
++      </div>
++      <div class="d-flex flex-wrap align-center qidi-box-filament-dialog__colors">
++        <div
++          v-for="color in palette"
++          :key="color.id"
++          class="qidi-box-filament-dialog__color"
++          :class="{ 'qidi-box-filament-dialog__color--selected': draft.color === color.id }"
++          :style="{ backgroundColor: color.hex }"
++          :title="color.hex"
++          @click="draft.color = color.id"
++        />
++      </div>
++    </v-card-text>
++  </app-dialog>
++</template>
++
++<script lang="ts">
++// Plus4 Grease: set a Box slot's filament, vendor and color by hand, for any spool, from the choices in QIDI's
++// officiall_filas_list.cfg. Saved exactly as QIDI's own Fluidd and touchscreen save them on the Plus 4's V2.1.1:
++// SAVE_VARIABLE VARIABLE=filament_slotN / vendor_slotN / color_slotN VALUE="<ID from the list>", slot 16 being the
++// external spool. From Valve Oil's QidiBoxFilamentDialog, cut down to that firmware's numeric IDs.
++import { Component, Mixins, Prop, VModel, Watch } from 'vue-property-decorator'
++import StateMixin from '@/mixins/state'
++import { normalizeQidiColor, type QidiBoxSlot } from '@/util/qidi-box'
++
++interface Draft {
++  vendor: string | null;
++  filament: string | null;
++  color: string | null;
++}
++
++@Component({})
++export default class QidiBoxFilamentDialog extends Mixins(StateMixin) {
++  @VModel({ type: Boolean })
++  open!: boolean
++
++  @Prop({ type: Object, required: true })
++  readonly boxSlot!: QidiBoxSlot
++
++  @Prop({ type: Boolean })
++  readonly busy!: boolean
++
++  draft: Draft = { vendor: null, filament: null, color: null }
++
++  get list () {
++    return this.$typedState.qidiBox.filamentList
++  }
++
++  saved (name: 'filament' | 'vendor' | 'color'): string | null {
++    const value = this.$typedState.printer.printer.save_variables?.variables?.[`${name}_slot${this.boxSlot.index}`]
++
++    return value != null && String(value) !== '' ? String(value) : null
++  }
++
++  get vendors () {
++    return Object.entries(this.list?.vendor_list ?? {}).map(([value, text]) => ({ value, text }))
++  }
++
++  get filaments () {
++    return Object.entries(this.list ?? {})
++      .filter(([key, entry]) => /^fila\d+$/.test(key) && entry.filament)
++      .map(([key, entry]) => ({ value: key.slice(4), text: entry.filament }))
++      .sort((a, b) => a.text.localeCompare(b.text))
++  }
++
++  get palette () {
++    return Object.entries(this.list?.colordict ?? {})
++      .map(([id, color]) => ({ id, hex: normalizeQidiColor(color) }))
++      .filter((color): color is { id: string, hex: string } => color.hex != null)
++  }
++
++  @Watch('open', { immediate: true })
++  onOpenChanged (value: boolean) {
++    if (!value) return
++
++    const filament = this.saved('filament')
++
++    this.draft = {
++      vendor: this.saved('vendor'),
++      filament: this.filaments.some(entry => entry.value === filament) ? filament : null,
++      color: this.saved('color')
++    }
++  }
++
++  handleSave () {
++    const { index } = this.boxSlot
++    const { vendor, filament, color } = this.draft
++    const lines: string[] = []
++
++    if (filament == null || this.busy) return
++
++    if (vendor != null && vendor !== this.saved('vendor')) lines.push(`SAVE_VARIABLE VARIABLE=vendor_slot${index} VALUE="${vendor}"`)
++    if (filament !== this.saved('filament')) lines.push(`SAVE_VARIABLE VARIABLE=filament_slot${index} VALUE="${filament}"`)
++    if (color != null && color !== this.saved('color')) lines.push(`SAVE_VARIABLE VARIABLE=color_slot${index} VALUE="${color}"`)
++
++    if (lines.length) this.sendGcode(lines.join('\n'))
++
++    this.open = false
++  }
++}
++</script>
++
++<style scoped>
++.qidi-box-filament-dialog__colors {
++  gap: 6px;
++}
++
++.qidi-box-filament-dialog__color {
++  width: 28px;
++  height: 28px;
++  border-radius: 50%;
++  cursor: pointer;
++  border: 1px solid rgba(128, 128, 128, 0.6);
++}
++
++.qidi-box-filament-dialog__color--selected {
++  border: 3px solid #2196f3;
 +}
 +</style>
 diff --git a/src/components/widgets/qidiBox/QidiBoxFlow.vue b/src/components/widgets/qidiBox/QidiBoxFlow.vue
@@ -2171,7 +2358,7 @@ index ed39791..d4b391b 100644
  
  export const SupportedLocales = Object.freeze([
 diff --git a/src/locales/en.yaml b/src/locales/en.yaml
-index 217e550..73ad6b7 100644
+index 217e550..479b5d2 100644
 --- a/src/locales/en.yaml
 +++ b/src/locales/en.yaml
 @@ -1456,6 +1456,239 @@ app:
@@ -2275,8 +2462,8 @@ index 217e550..73ad6b7 100644
 +        filaments. Check it is valid JSON, then restart the printer.
 +      flow_failed_help: Retry runs the step again; Stop ends the Box operation.
 +      flow_failed_read_only: Retry or stop it on the touchscreen or on QIDI's page (port 80).
-+      plus4_commands: Load, Unload, Eject, Read RFID and Box settings send the same commands as QIDI's own page. Drying is on the touchscreen; Plus4 Grease's install --box-dry adds it here.
-+      plus4_commands_dry: Load, Unload, Eject, Read RFID and Box settings send the same commands as QIDI's own page. Drying uses Plus4 Grease's GREASE_BOX_DRY, which keeps its timer on the printer.
++      plus4_commands: Load, Unload, Eject, Read RFID, Edit filament and Box settings send the same commands as QIDI's own page. Drying is on the touchscreen; Plus4 Grease's install --box-dry adds it here.
++      plus4_commands_dry: Load, Unload, Eject, Read RFID, Edit filament and Box settings send the same commands as QIDI's own page. Drying uses Plus4 Grease's GREASE_BOX_DRY, which keeps its timer on the printer.
 +      plus4_heater_limit: Box {box} heater up to {temp}°C, the lowest Box limit of the filaments loaded in it.
 +      plus4_heater_locked: Box {box} heater locked at 0°C. A filament loaded in it can't be heated in the Box (QIDI's limit; PLA and TPU are 0).
 +      loaded: Loaded %{slot}

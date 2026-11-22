@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.0
+- The new Fluidd's Box card has **Edit filament** (the pencil beside a slot's label; Fluidd build 8): pick the slot's vendor, filament and color from QIDI's filament list for any spool, with or without an RFID tag. It saves them as QIDI's own page and touchscreen do on V2.1.1: `SAVE_VARIABLE VARIABLE=vendor_slotN VALUE="<ID>"`, then `filament_slotN` and `color_slotN`, slot 16 being the external spool. Off while the Box or a print is busy and for an empty Box slot. From Valve Oil's Fluidd.
+- `docs/plus4-notes.md` says how the Plus 4's Box reads spool tags, and why Valve Oil's Box firmware that reads other brands' tags doesn't fit the Plus 4's Box as it is.
+
 ## 0.9.1
 - Box drying works: 0.9.0's macros were named `PLUS4_BOX_DRY` and `PLUS4_BOX_DRY_STOP`, and Klipper reads a command name only up to its first run of digits, so it took them as a command called `PLUS4` and never ran them. They're now `GREASE_BOX_DRY` and `GREASE_BOX_DRY_STOP` (Fluidd build 7 sends those). `tests/test_box_dry.py` now splits every command the way Klipper does and fails on a name Klipper would cut short.
 - `install` updates a file an earlier Plus4 Grease version wrote for a change (recognized by its SHA-256), without the change's switch again; `status` shows it as `update`. 0.9.0's `plus4-grease-box-dry.cfg` is updated this way.
