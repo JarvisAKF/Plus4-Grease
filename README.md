@@ -41,6 +41,12 @@ There is one Plus4 Grease for both. Each change looks for QIDI's exact stock tex
 | Z tilt and bed mesh at 300 mm/s | applies | a conversion usually sets its own speeds, so these are skipped unless you run `install --replace-own-speeds`, which sets them to 300 too and keeps a note of yours for `uninstall`. With a Beacon, the bed mesh speed is also its scan speed. |
 | USB event log and the tools | applies | applies |
 
+What one Beacon conversion was seen to change, as `tools/config_diff.py` showed it (conversions differ; check yours the same way):
+
+- Its `G29` finds Z zero by touching the bed (Beacon Contact), scans the mesh with `BED_MESH_CALIBRATE RUNS=2`, and never calls QIDI's `SAVE_CONFIG_QD`, so the save-wait change has nothing to shorten. It also sets acceleration to 1000 mm/s² while meshing, so the 300 mm/s mesh speed is only reached on long scan moves.
+- It removes QIDI's probe (`[smart_effector]`, `[qdprobe]`), QIDI's `[homing_override]`, and the probe's Z-offset macros, which it replaces with Beacon's. Plus4 Grease touches none of these.
+- It sets its own Z tilt (200 mm/s, 5 retries, 0.008 mm tolerance) and a finer bed mesh (14×14), which is why the speed changes need `--replace-own-speeds` there.
+
 `install --dry-run` shows which changes apply on your printer before anything is touched. So far Plus4 Grease has been tested on a Beacon-converted Plus 4 with one Box; see [docs/testing.md](docs/testing.md). Results from a stock Plus 4 are wanted, especially for the bed mesh save change and the 300 mm/s probe travel with QIDI's own probe. `tools/config_diff.py` lists everything a printer's config changes from QIDI's stock one, which is a quick way to see what a conversion touched.
 
 ## How it stays safe

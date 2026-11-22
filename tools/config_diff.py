@@ -94,15 +94,17 @@ def norm(value):
         return value
 
 
-def show(value, limit=90):
+def show(value, limit=240):
     if isinstance(value, list):
         return "{} line{}".format(len(value), "" if len(value) == 1 else "s")
     value = redact(value)
     return value if len(value) <= limit else value[:limit - 3] + "..."
 
 
-def compare(stock, yours, out, label="", body_diff=True):
-    """Section-by-section differences between two parsed configs. Returns the number of differences."""
+def compare(stock, yours, out, label="", body_diff=True, saved=None):
+    """Section-by-section differences between two parsed configs. Returns the number of differences.
+    saved: your SAVE_CONFIG block; an option gone from a section but set there was moved by SAVE_CONFIG
+    (Klipper comments out the line it overrides), so it's shown as moved, with both values."""
     count = 0
     added = [s for s in yours if s not in stock]
     removed = [s for s in stock if s not in yours]
@@ -124,7 +126,11 @@ def compare(stock, yours, out, label="", body_diff=True):
         a, b = stock[name], yours[name]
         lines = []
         for key in a:
-            if key not in b:
+            if key not in b and saved and key in saved.get(name, {}):
+                new = saved[name][key]
+                lines.append("        {}: {} -> {} (now in the SAVE_CONFIG block{})".format(
+                    key, show(a[key]), show(new), "" if norm(a[key]) != norm(new) else ", same value"))
+            elif key not in b:
                 lines.append("        removed {}: {}".format(key, show(a[key])))
             elif norm(a[key]) != norm(b[key]):
                 if isinstance(a[key], list) or isinstance(b[key], list):
@@ -214,7 +220,7 @@ def main(argv=None):
             stock_sections, stock_saved = parse(read(stock_path))
             your_sections, your_saved = parse(yours[name])
             out("{}:".format(name))
-            count = compare(stock_sections, your_sections, out)
+            count = compare(stock_sections, your_sections, out, saved=your_saved)
             if stock_saved or your_saved:
                 saved = compare(stock_saved, your_saved, out, label="SAVE_CONFIG block: ", body_diff=False)
                 count += saved

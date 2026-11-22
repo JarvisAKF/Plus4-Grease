@@ -100,6 +100,14 @@ class ConfigDiffTests(unittest.TestCase):
         self.assertIn("Z tilt: 300 mm/s instead of 150 between probe points", out)
         self.assertIn("0 differences in all.", out)
 
+    def test_pid_moved_to_save_config_is_shown_as_moved(self):
+        printer = stock("printer.cfg").replace("pid_Kp=33.555", "#pid_Kp=33.555")
+        printer += "#*# [extruder]\n#*# pid_kp = 32.468\n"
+        self.write("printer.cfg", printer)
+        out = self.run_diff()
+        self.assertIn("        pid_kp: 33.555 -> 32.468 (now in the SAVE_CONFIG block)", out)
+        self.assertNotIn("removed pid_kp", out)
+
     def test_inline_comments_and_spacing_dont_count(self):
         printer = stock("printer.cfg").replace("speed: 150\n", "speed : 150   # QIDI's\n", 1)
         printer = printer.replace("mesh_min:25,10\n", "mesh_min: 25, 10\n")
