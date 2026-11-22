@@ -1,0 +1,3550 @@
+diff --git a/src/components/widgets/qidiBox/QidiBoxCard.vue b/src/components/widgets/qidiBox/QidiBoxCard.vue
+new file mode 100644
+index 0000000..2c1fb16
+--- /dev/null
++++ b/src/components/widgets/qidiBox/QidiBoxCard.vue
+@@ -0,0 +1,359 @@
++<template>
++  <collapsable-card
++    :title="$t('app.qidi_box.title.qidi_box')"
++    icon="$qidiBox"
++    draggable
++    layout-path="dashboard.box-card"
++  >
++    <div class="pa-3 qidi-box-card">
++      <qidi-box-flow
++        :slots="slots"
++        :box-count="boxCount"
++        :climates="climates"
++        :selected="selected"
++        :loaded-slot="loadedSlot"
++        :hub-slot="hubSlot"
++        :toolhead-slot="toolheadSlot"
++        :hub-triggered="hub === 0"
++        :tools-by-slot="toolsBySlot"
++        :reload-groups="reloadGroups"
++        :busy="busy && !flowPaused"
++        :step="taskStep"
++        @select="selected = $event"
++        @tool-click="selected = $event.slot"
++      />
++
++      <v-alert
++        v-if="flowPaused"
++        text
++        dense
++        type="error"
++        class="mt-3 mb-0"
++      >
++        <div class="font-weight-medium">
++          {{ failedStep }}
++        </div>
++        <div
++          v-for="problem in problems"
++          :key="`problem:${problem}`"
++          class="text-body-2"
++        >
++          {{ problem }}
++        </div>
++        <div class="text-caption mt-1">
++          {{ $t('app.qidi_box.msg.flow_failed_read_only') }}
++        </div>
++      </v-alert>
++
++      <v-alert
++        v-else-if="problems.length"
++        text
++        dense
++        type="warning"
++        class="mt-3 mb-0"
++      >
++        <div
++          v-for="problem in problems"
++          :key="`warning:${problem}`"
++          class="text-body-2"
++        >
++          {{ problem }}
++        </div>
++      </v-alert>
++
++      <div class="mt-3 pa-3 rounded-lg qidi-box-card__sheet">
++        <div class="text-overline text--secondary qidi-box-card__overline">
++          {{ overline }}
++        </div>
++        <div
++          v-if="current.present && current.name"
++          class="text-subtitle-1 font-weight-medium d-flex align-center qidi-box-card__name"
++        >
++          <span
++            class="qidi-box-card__swatch"
++            :style="{ backgroundColor: current.color || 'transparent' }"
++          />
++          {{ current.name }}
++        </div>
++        <div
++          v-else
++          class="text-subtitle-1 font-weight-medium text--secondary"
++        >
++          {{ current.present ? $t('app.qidi_box.label.unknown_filament') : $t('app.qidi_box.label.empty') }}
++        </div>
++
++        <div class="d-flex flex-wrap text-caption text--secondary mt-1 qidi-box-card__details">
++          <span
++            v-for="detail in details"
++            :key="detail.key"
++            class="d-inline-flex align-center"
++            :class="{ 'amber--text': detail.key === 'rfid' }"
++          >
++            <v-icon
++              v-if="detail.icon"
++              x-small
++              class="mr-1"
++              :class="{ 'amber--text': detail.key === 'rfid' }"
++            >
++              {{ detail.icon }}
++            </v-icon>
++            {{ detail.text }}
++          </span>
++        </div>
++
++        <div class="text-caption text--disabled mt-2">
++          {{ $t('app.qidi_box.msg.read_only') }}
++        </div>
++      </div>
++    </div>
++  </collapsable-card>
++</template>
++
++<script lang="ts">
++// Plus4 Grease: a read-only QIDI Box card for the Plus 4 on QIDI firmware V2.1.1. The Box drawing (QidiBoxFlow and
++// the parts it uses), the Box store, and the slot and task parsing come from Valve Oil's Fluidd
++// (github.com/thelegendtubaguy/fluidd, GPL-3.0); this card is Valve Oil's QidiBoxCard with every command taken out,
++// so it sends nothing to the printer.
++import { Component, Vue, Watch } from 'vue-property-decorator'
++import {
++  QIDI_BOX_EXTERNAL_SLOT,
++  qidiBoxReloadGroups,
++  type QidiBoxClimate,
++  type QidiBoxReloadGroups,
++  type QidiBoxSlot,
++  qidiBoxSlotLabel
++} from '@/util/qidi-box'
++import { QIDI_BOX_STEP_UNKNOWN, type QidiBoxError, type QidiBoxStepText } from '@/util/qidi-box-task'
++import QidiBoxFlow from './QidiBoxFlow.vue'
++
++interface Detail {
++  key: string;
++  icon: string | null;
++  text: string;
++}
++
++@Component({
++  components: {
++    QidiBoxFlow
++  }
++})
++export default class QidiBoxCard extends Vue {
++  selected = 0
++
++  get boxCount (): number {
++    return this.$typedGetters['qidiBox/getBoxCount']
++  }
++
++  get slots (): QidiBoxSlot[] {
++    return this.$typedGetters['qidiBox/getSlots']
++  }
++
++  get current (): QidiBoxSlot {
++    return this.slots.find(slot => slot.index === this.selected) ?? this.slots[this.slots.length - 1]
++  }
++
++  get currentExternal (): boolean {
++    return this.current.index === QIDI_BOX_EXTERNAL_SLOT
++  }
++
++  get toolMap (): Record<number, number> {
++    return this.$typedGetters['qidiBox/getToolMap']
++  }
++
++  get toolsBySlot (): Record<number, string[]> {
++    const tools: Record<number, string[]> = {}
++
++    for (const [tool, slot] of Object.entries(this.toolMap)) {
++      (tools[slot] = tools[slot] ?? []).push(`T${tool}`)
++    }
++
++    return tools
++  }
++
++  get loadedSlot (): number | null {
++    return this.$typedGetters['qidiBox/getLoadedSlot']
++  }
++
++  get hub (): number | null {
++    return this.$typedGetters['qidiBox/getHubSensor']
++  }
++
++  get autoReload (): boolean {
++    return this.$typedGetters['qidiBox/getAutoReload']
++  }
++
++  get reloadGroups (): QidiBoxReloadGroups {
++    return this.autoReload ? qidiBoxReloadGroups(this.slots) : {}
++  }
++
++  get climates (): Record<number, QidiBoxClimate> {
++    return Object.fromEntries(Array.from({ length: this.boxCount }, (_, i) => [i + 1, this.climate(i + 1)]))
++  }
++
++  get busy (): boolean {
++    return this.$typedGetters['qidiBox/getBusy']
++  }
++
++  // The hub sees the loaded slot's filament, or, while it is parked, unloading, or stranded by a failed load, the
++  // slot recorded at the hub; the toolhead sensor sees only the loaded slot's.
++  get hubSlot (): number | null {
++    if (this.hub !== 0) return null
++
++    return this.loadedSlot != null && this.loadedSlot !== QIDI_BOX_EXTERNAL_SLOT
++      ? this.loadedSlot
++      : this.$typedGetters['qidiBox/getHubSlot']
++  }
++
++  get toolheadSlot (): number | null {
++    return this.$typedGetters['qidiBox/getToolheadFilament'] ? this.loadedSlot : null
++  }
++
++  get flowPaused (): boolean {
++    return this.$typedGetters['qidiBox/getFlowPaused']
++  }
++
++  get taskText (): QidiBoxStepText | null {
++    return this.$typedGetters['qidiBox/getTaskText']
++  }
++
++  get taskStep (): string | null {
++    if (this.flowPaused || this.taskText == null) return null
++
++    return this.stepText(this.taskText)
++  }
++
++  get failedStep (): string {
++    const text = this.taskText
++
++    if (text == null || text.key === QIDI_BOX_STEP_UNKNOWN) return this.$t('app.qidi_box.step.failed_unknown').toString()
++
++    return this.$t('app.qidi_box.step.failed', { step: this.stepText(text) }).toString()
++  }
++
++  get lastError (): QidiBoxError | null {
++    return this.$typedGetters['qidiBox/getLastError']
++  }
++
++  // The failed step's console error, then QIDI's Box warnings.
++  get problems (): string[] {
++    const error = this.lastError
++    const problems = error
++      ? [error.code ? this.$t('app.qidi_box.msg.box_error', { ...error }).toString() : error.message]
++      : []
++
++    return [...new Set([...problems, ...this.$typedGetters['qidiBox/getWarnings']])]
++  }
++
++  get overline (): string {
++    const tools = this.toolsBySlot[this.current.index] ?? []
++
++    return [
++      this.currentExternal ? this.$t('app.qidi_box.label.external_spool') : this.$t('app.qidi_box.label.slot', { slot: this.current.label }),
++      tools.length ? tools.join(', ') : this.$t('app.qidi_box.label.no_tool'),
++      this.loadedSlot === this.current.index ? this.$t('app.qidi_box.label.loaded') : null
++    ].filter(Boolean).join(' · ')
++  }
++
++  get details (): Detail[] {
++    const { present, vendor, type, color, minTemp, maxTemp, boxMaxTemp, reading } = this.current
++    const filament = present ? [vendor, type, color].filter(Boolean).join(' · ') : ''
++
++    return [
++      filament ? { key: 'filament', icon: null, text: filament } : null,
++      minTemp != null && maxTemp != null
++        ? { key: 'nozzle', icon: '$printer3dNozzle', text: this.$t('app.qidi_box.msg.nozzle_range', { min: minTemp, max: maxTemp }).toString() }
++        : null,
++      boxMaxTemp != null && boxMaxTemp > 0
++        ? { key: 'drying', icon: '$fire', text: this.$t('app.qidi_box.msg.box_drying', { temp: boxMaxTemp }).toString() }
++        : null,
++      reading ? { key: 'rfid', icon: null, text: this.$t('app.qidi_box.msg.reading_rfid').toString() } : null,
++      present && !this.currentExternal ? { key: 'reload', icon: '$sync', text: this.reloadText } : null
++    ].filter((detail): detail is Detail => detail != null)
++  }
++
++  get reloadText (): string {
++    if (!this.autoReload) return this.$t('app.qidi_box.msg.auto_reload_off').toString()
++
++    const group = this.reloadGroups[this.current.index]
++
++    if (!group) return this.$t('app.qidi_box.msg.no_reload_backup').toString()
++
++    return this.$t('app.qidi_box.msg.reload_with', {
++      slots: group.members.filter(member => member !== this.current.index).map(qidiBoxSlotLabel).join(', ')
++    }).toString()
++  }
++
++  @Watch('boxCount')
++  onBoxCountChanged () {
++    if (!this.slots.some(slot => slot.index === this.selected)) this.selected = this.loadedSlot ?? 0
++  }
++
++  created () {
++    if (this.loadedSlot != null) this.selected = this.loadedSlot
++  }
++
++  climate (box: number): QidiBoxClimate {
++    const sensor = this.$typedState.printer.printer[`aht20_f heater_box${box}`]
++    const target = this.$typedState.printer.printer[`heater_generic heater_box${box}`]?.target
++
++    return {
++      humidity: sensor?.humidity != null ? Math.round(sensor.humidity) : null,
++      temperature: sensor?.temperature != null ? Math.round(sensor.temperature) : null,
++      target: target != null && target > 0 ? Math.round(target) : null
++    }
++  }
++
++  stepText (text: QidiBoxStepText): string {
++    return this.$t(`app.qidi_box.step.${text.key}`, text.params).toString()
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++// Shared by the flow, units, spools, and nozzle. The surface matches the card (Vuetify's elevation 1), so labels and
++// spool holes can mask the strands behind them.
++.theme--dark .qidi-box-card {
++  --qidi-box-surface: #{map-get($material-dark-elevation-colors, '1')};
++  --qidi-box-block: #3a3a3d;
++  --qidi-box-edge: rgba(255, 255, 255, 0.35);
++  --qidi-box-contrast: rgba(255, 255, 255, 0.7);
++  --qidi-box-muted: rgba(255, 255, 255, 0.38);
++  --qidi-box-track: rgba(255, 255, 255, 0.14);
++  --qidi-box-line: rgba(255, 255, 255, 0.12);
++  --qidi-box-tint: rgba(255, 255, 255, 0.06);
++}
++
++.theme--light .qidi-box-card {
++  --qidi-box-surface: #ffffff;
++  --qidi-box-block: #dcdcdf;
++  --qidi-box-edge: rgba(0, 0, 0, 0.35);
++  --qidi-box-contrast: rgba(0, 0, 0, 0.6);
++  --qidi-box-muted: rgba(0, 0, 0, 0.38);
++  --qidi-box-track: rgba(0, 0, 0, 0.12);
++  --qidi-box-line: rgba(0, 0, 0, 0.12);
++  --qidi-box-tint: rgba(0, 0, 0, 0.04);
++}
++
++.qidi-box-card__sheet {
++  background: var(--qidi-box-tint);
++}
++
++.qidi-box-card__overline {
++  line-height: 1.6;
++}
++
++.qidi-box-card__name {
++  gap: 8px;
++}
++
++.qidi-box-card__swatch {
++  width: 14px;
++  height: 14px;
++  border-radius: 50%;
++  border: 1px solid rgba(128, 128, 128, 0.6);
++}
++
++.qidi-box-card__details {
++  gap: 4px 14px;
++}
++</style>
+diff --git a/src/components/widgets/qidiBox/QidiBoxFlow.vue b/src/components/widgets/qidiBox/QidiBoxFlow.vue
+new file mode 100644
+index 0000000..30c5451
+--- /dev/null
++++ b/src/components/widgets/qidiBox/QidiBoxFlow.vue
+@@ -0,0 +1,522 @@
++<template>
++  <!-- Box units around the filament path hub → toolhead → extruder → nozzle. Strands in the filament's color show
++       what the sensors see: the slot parked at the hub, and the slot loaded to the nozzle. -->
++  <div class="qidi-box-flow">
++    <qidi-box-loaded-summary
++      v-if="layout.narrow"
++      class="mb-3 pa-3 rounded-lg qidi-box-flow__summary"
++      large
++      v-bind="summary"
++    />
++
++    <div
++      ref="diagram"
++      class="qidi-box-flow__diagram"
++    >
++      <svg
++        class="qidi-box-flow__strands"
++        :width="svgWidth"
++        :height="svgHeight"
++        aria-hidden="true"
++      >
++        <template v-for="path in paths">
++          <path
++            v-if="path.slot == null"
++            :key="path.key"
++            :d="path.d"
++            class="qidi-box-flow__guide"
++          />
++          <template v-else>
++            <path
++              :key="`${path.key}:edge`"
++              :d="path.d"
++              class="qidi-box-flow__strand-edge"
++              :class="{ 'qidi-box-flow__strand-edge--contrast': path.contrast }"
++            />
++            <path
++              :key="path.key"
++              :d="path.d"
++              class="qidi-box-flow__strand"
++              :style="{ stroke: path.color ?? undefined }"
++            />
++          </template>
++        </template>
++      </svg>
++
++      <div
++        v-if="!layout.compact"
++        class="qidi-box-flow__tier"
++      >
++        <qidi-box-unit
++          v-for="box in layout.top"
++          :key="`unit:${box}`"
++          v-bind="unitProps(box)"
++          v-on="unitListeners"
++        />
++      </div>
++
++      <div
++        class="qidi-box-flow__rail"
++        :class="{
++          'qidi-box-flow__rail--first': layout.compact,
++          'qidi-box-flow__rail--last': !layout.compact && !layout.bottom.length
++        }"
++      >
++        <div class="qidi-box-flow__path">
++          <template v-if="boxCount">
++            <div
++              class="qidi-box-flow__node"
++              :class="{ 'qidi-box-flow__node--on': hubTriggered }"
++              :title="$t('app.qidi_box.label.hub').toString()"
++            >
++              <span
++                class="qidi-box-flow__sensor"
++                data-port="hub"
++              />
++              <small>{{ hubLabel }}</small>
++            </div>
++            <div class="qidi-box-flow__ptfe">
++              <small>PTFE</small>
++            </div>
++          </template>
++          <div
++            class="qidi-box-flow__node"
++            :class="{ 'qidi-box-flow__node--on': toolheadSlot != null }"
++            :title="$t('app.qidi_box.label.toolhead_sensor').toString()"
++          >
++            <span
++              class="qidi-box-flow__sensor"
++              data-port="th"
++            />
++            <small>{{ $t('app.qidi_box.label.toolhead') }}</small>
++          </div>
++          <div class="qidi-box-flow__node">
++            <span
++              class="qidi-box-flow__extruder"
++              data-port="ex"
++            />
++            <small>{{ $t('app.qidi_box.label.extruder') }}</small>
++          </div>
++          <div
++            class="qidi-box-flow__node"
++            :class="{ 'qidi-box-flow__node--on': nozzleColor != null }"
++          >
++            <span
++              class="qidi-box-flow__nozzle"
++              data-port="noz"
++            >
++              <qidi-box-nozzle :color="nozzleColor" />
++            </span>
++            <small>{{ $t('app.qidi_box.label.nozzle') }}</small>
++          </div>
++        </div>
++
++        <qidi-box-loaded-summary
++          v-if="!layout.narrow"
++          class="qidi-box-flow__inline-summary"
++          :size="40"
++          v-bind="summary"
++        />
++      </div>
++
++      <div
++        v-if="layout.compact || layout.bottom.length"
++        class="qidi-box-flow__tier"
++      >
++        <qidi-box-unit
++          v-for="box in (layout.compact ? layout.top : layout.bottom)"
++          :key="`unit:${box}`"
++          v-bind="unitProps(box)"
++          :below="!layout.compact"
++          v-on="unitListeners"
++        />
++      </div>
++    </div>
++  </div>
++</template>
++
++<script lang="ts">
++import { Component, Prop, Vue } from 'vue-property-decorator'
++import { markRaw } from 'vue'
++import {
++  QIDI_BOX_EXTERNAL_SLOT,
++  qidiBoxSlotLabel,
++  qidiColorNearBackground,
++  type QidiBoxClimate,
++  type QidiBoxReloadGroups,
++  type QidiBoxSlot
++} from '@/util/qidi-box'
++import {
++  qidiBoxFlowConnections,
++  qidiBoxFlowLayout,
++  qidiBoxFlowPath,
++  type QidiBoxFlowLayout
++} from '@/util/qidi-box-flow'
++import QidiBoxUnit from './QidiBoxUnit.vue'
++import QidiBoxNozzle from './QidiBoxNozzle.vue'
++import QidiBoxLoadedSummary from './QidiBoxLoadedSummary.vue'
++
++interface FlowPath {
++  key: string;
++  d: string;
++  slot: number | null;
++  color: string | null;
++  contrast: boolean;
++}
++
++@Component({
++  components: {
++    QidiBoxUnit,
++    QidiBoxNozzle,
++    QidiBoxLoadedSummary
++  }
++})
++export default class QidiBoxFlow extends Vue {
++  @Prop({ type: Array, required: true })
++  readonly slots!: QidiBoxSlot[]
++
++  @Prop({ type: Number, required: true })
++  readonly boxCount!: number
++
++  @Prop({ type: Object, required: true })
++  readonly climates!: Record<number, QidiBoxClimate>
++
++  @Prop({ type: Number, required: true })
++  readonly selected!: number
++
++  @Prop({ type: Number, default: null })
++  readonly loadedSlot!: number | null
++
++  // The slot whose filament the hub sensor sees, and the one at the toolhead sensor.
++  @Prop({ type: Number, default: null })
++  readonly hubSlot!: number | null
++
++  @Prop({ type: Number, default: null })
++  readonly toolheadSlot!: number | null
++
++  @Prop({ type: Boolean })
++  readonly hubTriggered!: boolean
++
++  @Prop({ type: Object, required: true })
++  readonly toolsBySlot!: Record<number, string[]>
++
++  @Prop({ type: Object, required: true })
++  readonly reloadGroups!: QidiBoxReloadGroups
++
++  @Prop({ type: Boolean })
++  readonly busy!: boolean
++
++  @Prop({ type: String, default: null })
++  readonly step!: string | null
++
++  width = 0
++  svgWidth = 0
++  svgHeight = 0
++  paths: FlowPath[] = []
++  pathsKey = ''
++  observer: ResizeObserver | null = null
++  frame = 0
++
++  get layout (): QidiBoxFlowLayout {
++    return qidiBoxFlowLayout(this.width, this.boxCount)
++  }
++
++  get slotByIndex (): Record<number, QidiBoxSlot> {
++    return Object.fromEntries(this.slots.map(slot => [slot.index, slot]))
++  }
++
++  get unitListeners () {
++    return {
++      select: (index: number) => this.$emit('select', index),
++      'tool-click': (entry: { tool: number, slot: number }) => this.$emit('tool-click', entry)
++    }
++  }
++
++  get pathSlot (): QidiBoxSlot | null {
++    const index = this.toolheadSlot ?? this.hubSlot
++
++    return index != null ? this.slotByIndex[index] ?? null : null
++  }
++
++  get summary () {
++    const slot = this.pathSlot
++
++    return {
++      boxSlot: slot,
++      loaded: slot != null && slot.index === this.loadedSlot,
++      tools: slot ? this.toolsBySlot[slot.index] ?? [] : [],
++      busy: this.busy,
++      step: this.step
++    }
++  }
++
++  get hubLabel (): string {
++    const hub = this.$t('app.qidi_box.label.hub').toString()
++
++    return this.hubSlot != null ? `${hub} · ${qidiBoxSlotLabel(this.hubSlot)}` : hub
++  }
++
++  get nozzleColor (): string | null {
++    const slot = this.toolheadSlot != null ? this.slotByIndex[this.toolheadSlot] : null
++
++    return slot ? slot.color ?? '#9e9e9e' : null
++  }
++
++  unitProps (box: number) {
++    const external = box === 0
++
++    return {
++      title: external ? this.$t('app.qidi_box.label.external').toString() : this.$t('app.qidi_box.label.box', { box }).toString(),
++      slots: this.slots.filter(slot => external
++        ? slot.index === QIDI_BOX_EXTERNAL_SLOT
++        : slot.index !== QIDI_BOX_EXTERNAL_SLOT && Math.floor(slot.index / 4) === box - 1),
++      climate: external ? null : this.climates[box] ?? null,
++      external,
++      selected: this.selected,
++      loadedSlot: this.loadedSlot,
++      toolsBySlot: this.toolsBySlot,
++      reloadGroups: this.reloadGroups,
++      spoolSize: this.layout.spoolSize
++    }
++  }
++
++  mounted () {
++    this.width = this.$el.clientWidth
++
++    if (typeof ResizeObserver !== 'undefined') {
++      this.observer = markRaw(new ResizeObserver(() => {
++        this.width = this.$el.clientWidth
++        this.scheduleMeasure()
++      }))
++      this.observer.observe(this.$el)
++
++      const diagram = this.$refs.diagram
++
++      if (diagram instanceof HTMLElement) this.observer.observe(diagram)
++    }
++
++    document.fonts?.ready.then(() => this.scheduleMeasure())
++    this.scheduleMeasure()
++  }
++
++  updated () {
++    this.scheduleMeasure()
++  }
++
++  beforeDestroy () {
++    this.observer?.disconnect()
++    cancelAnimationFrame(this.frame)
++  }
++
++  scheduleMeasure () {
++    if (this.frame) return
++
++    this.frame = requestAnimationFrame(() => {
++      this.frame = 0
++      this.measure()
++    })
++  }
++
++  // The connectors follow the laid-out ports, so they are measured after each render rather than computed.
++  measure () {
++    const diagram = this.$refs.diagram
++
++    if (!(diagram instanceof HTMLElement)) return
++
++    const bounds = diagram.getBoundingClientRect()
++
++    if (bounds.width === 0) return
++
++    const ports = new Map<string, [number, number]>()
++
++    for (const element of Array.from(diagram.querySelectorAll<HTMLElement>('[data-port]'))) {
++      const rect = element.getBoundingClientRect()
++
++      ports.set(element.dataset.port ?? '', [
++        rect.left + rect.width / 2 - bounds.left,
++        rect.top + rect.height / 2 - bounds.top
++      ])
++    }
++
++    const dark = this.$vuetify.theme.dark
++    const paths: FlowPath[] = []
++
++    for (const connection of qidiBoxFlowConnections(this.hubSlot, this.toolheadSlot, this.layout.compact)) {
++      const points = connection.via.flatMap(port => {
++        const point = ports.get(port)
++
++        return point ? [point] : []
++      })
++
++      if (points.length < 2) continue
++
++      const slot = connection.slot != null ? this.slotByIndex[connection.slot] : null
++      const color = slot ? slot.color ?? '#9e9e9e' : null
++
++      paths.push({
++        key: connection.key,
++        d: qidiBoxFlowPath(points, connection.dir),
++        slot: connection.slot,
++        color,
++        contrast: color != null && qidiColorNearBackground(color, dark)
++      })
++    }
++
++    const key = JSON.stringify([bounds.width, bounds.height, paths])
++
++    if (key === this.pathsKey) return
++
++    this.pathsKey = key
++    this.svgWidth = Math.ceil(bounds.width)
++    this.svgHeight = Math.ceil(bounds.height)
++    this.paths = paths
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.qidi-box-flow__summary {
++  background: var(--qidi-box-tint);
++}
++
++.qidi-box-flow__diagram {
++  position: relative;
++}
++
++.qidi-box-flow__strands {
++  position: absolute;
++  top: 0;
++  left: 0;
++  pointer-events: none;
++}
++
++.qidi-box-flow__diagram > :not(.qidi-box-flow__strands) {
++  position: relative;
++}
++
++.qidi-box-flow__guide {
++  fill: none;
++  stroke: var(--qidi-box-track);
++  stroke-width: 2;
++}
++
++.qidi-box-flow__strand-edge {
++  fill: none;
++  stroke: var(--qidi-box-edge);
++  stroke-width: 6.5;
++  stroke-linecap: round;
++}
++
++.qidi-box-flow__strand-edge--contrast {
++  stroke: var(--qidi-box-contrast);
++  stroke-width: 7.5;
++}
++
++.qidi-box-flow__strand {
++  fill: none;
++  stroke-width: 4;
++  stroke-linecap: round;
++}
++
++.qidi-box-flow__tier {
++  display: flex;
++  flex-wrap: wrap;
++  justify-content: center;
++  gap: 12px 10px;
++}
++
++.qidi-box-flow__rail {
++  display: flex;
++  flex-wrap: wrap;
++  align-items: center;
++  justify-content: center;
++  gap: 14px 28px;
++  padding: 40px 0;
++}
++
++.qidi-box-flow__rail--first {
++  padding: 4px 0 16px;
++}
++
++.qidi-box-flow__rail--last {
++  padding-bottom: 4px;
++}
++
++.qidi-box-flow__path {
++  display: flex;
++  flex: none;
++  align-items: flex-start;
++}
++
++.qidi-box-flow__node {
++  display: flex;
++  flex-direction: column;
++  align-items: center;
++  gap: 11px;
++  width: 64px;
++  opacity: 0.6;
++}
++
++.qidi-box-flow__node--on {
++  opacity: 1;
++}
++
++.qidi-box-flow__node small {
++  padding: 0 3px;
++  border-radius: 3px;
++  background: var(--qidi-box-surface);
++  font-size: 11px;
++  white-space: nowrap;
++}
++
++.qidi-box-flow__sensor {
++  width: 14px;
++  height: 14px;
++  border-radius: 50%;
++  background: var(--qidi-box-surface);
++  box-shadow: inset 0 0 0 2px var(--qidi-box-muted);
++}
++
++.qidi-box-flow__node--on .qidi-box-flow__sensor {
++  background: #4caf50;
++  box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.25);
++}
++
++.qidi-box-flow__extruder {
++  width: 14px;
++  height: 14px;
++  border-radius: 3px;
++  background: var(--qidi-box-surface);
++  box-shadow: inset 0 0 0 1.5px var(--qidi-box-muted);
++}
++
++// The heater block's centre lines up with the sensors; the heat break and tip overhang.
++.qidi-box-flow__nozzle {
++  position: relative;
++  width: 24px;
++  height: 14px;
++
++  svg {
++    position: absolute;
++    top: -8px;
++    left: 0;
++  }
++}
++
++.qidi-box-flow__ptfe {
++  display: flex;
++  justify-content: center;
++  width: 30px;
++
++  small {
++    margin-top: -12px;
++    font-size: 9px;
++    letter-spacing: 0.08em;
++    opacity: 0.6;
++  }
++}
++
++.qidi-box-flow__inline-summary {
++  flex: 0 1 280px;
++}
++</style>
+diff --git a/src/components/widgets/qidiBox/QidiBoxLoadedSummary.vue b/src/components/widgets/qidiBox/QidiBoxLoadedSummary.vue
+new file mode 100644
+index 0000000..2edf1ba
+--- /dev/null
++++ b/src/components/widgets/qidiBox/QidiBoxLoadedSummary.vue
+@@ -0,0 +1,142 @@
++<template>
++  <!-- The filament in the path: at the toolhead, or parked at the hub. -->
++  <div class="d-flex align-center qidi-box-loaded-summary">
++    <qidi-box-spool
++      v-if="boxSlot"
++      :box-slot="boxSlot"
++      :size="size"
++      :hole-ratio="0.4"
++      :loaded="loaded"
++    />
++    <span
++      v-else
++      class="d-inline-flex align-center justify-center qidi-box-loaded-summary__none"
++      :style="{ width: `${size}px`, height: `${size}px` }"
++    >
++      <v-icon :small="size < 48">
++        {{ busy ? '$sync' : '$qidiBox' }}
++      </v-icon>
++    </span>
++
++    <div class="qidi-box-loaded-summary__text">
++      <div class="text-overline text--secondary text-truncate qidi-box-loaded-summary__overline">
++        {{ overline }}
++      </div>
++      <div
++        class="text-truncate font-weight-medium"
++        :class="large ? 'text-h6' : 'text-subtitle-1'"
++      >
++        {{ title }}
++      </div>
++      <div
++        v-if="subtitle"
++        class="text-caption text--secondary text-truncate"
++      >
++        {{ subtitle }}
++      </div>
++      <v-progress-linear
++        v-if="busy"
++        indeterminate
++        rounded
++        height="3"
++        class="mt-2"
++      />
++    </div>
++  </div>
++</template>
++
++<script lang="ts">
++import { Component, Prop, Vue } from 'vue-property-decorator'
++import type { QidiBoxSlot } from '@/util/qidi-box'
++import QidiBoxSpool from './QidiBoxSpool.vue'
++
++@Component({
++  components: {
++    QidiBoxSpool
++  }
++})
++export default class QidiBoxLoadedSummary extends Vue {
++  @Prop({ type: Object, default: null })
++  readonly boxSlot!: QidiBoxSlot | null
++
++  // Loaded to the toolhead, rather than parked at the hub.
++  @Prop({ type: Boolean })
++  readonly loaded!: boolean
++
++  @Prop({ type: Array, default: () => [] })
++  readonly tools!: string[]
++
++  @Prop({ type: Boolean })
++  readonly busy!: boolean
++
++  @Prop({ type: String, default: null })
++  readonly step!: string | null
++
++  @Prop({ type: Number, default: 52 })
++  readonly size!: number
++
++  @Prop({ type: Boolean })
++  readonly large!: boolean
++
++  get filamentName (): string {
++    const slot = this.boxSlot
++
++    if (!slot) return ''
++    if (!slot.present) return this.$t('app.qidi_box.label.empty').toString()
++
++    return slot.name ?? this.$t('app.qidi_box.label.unknown_filament').toString()
++  }
++
++  get overline (): string {
++    if (this.busy) return this.$t('app.qidi_box.msg.box_busy').toString()
++
++    const slot = this.boxSlot
++
++    if (!slot) return this.$t('app.qidi_box.label.toolhead').toString()
++
++    const where = this.loaded
++      ? this.$t('app.qidi_box.msg.loaded', { slot: slot.label })
++      : this.$t('app.qidi_box.msg.at_hub', { slot: slot.label })
++
++    return [where, this.tools.join(', ')].filter(Boolean).join(' · ')
++  }
++
++  get title (): string {
++    if (this.busy) return this.step ?? this.$t('app.qidi_box.msg.box_busy').toString()
++    if (!this.boxSlot) return this.$t('app.qidi_box.msg.no_filament_loaded').toString()
++
++    return this.filamentName
++  }
++
++  get subtitle (): string {
++    const slot = this.boxSlot
++
++    if (!slot) return ''
++    if (this.busy) return `${slot.label} · ${this.filamentName}`
++
++    return slot.present ? [slot.vendor, slot.type].filter(Boolean).join(' · ') : ''
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.qidi-box-loaded-summary {
++  gap: 12px;
++  min-width: 0;
++}
++
++.qidi-box-loaded-summary__text {
++  flex: 1 1 auto;
++  min-width: 0;
++}
++
++.qidi-box-loaded-summary__overline {
++  line-height: 1.6;
++}
++
++.qidi-box-loaded-summary__none {
++  flex: none;
++  border-radius: 50%;
++  box-shadow: inset 0 0 0 2px var(--qidi-box-muted);
++}
++</style>
+diff --git a/src/components/widgets/qidiBox/QidiBoxNozzle.vue b/src/components/widgets/qidiBox/QidiBoxNozzle.vue
+new file mode 100644
+index 0000000..a3aec82
+--- /dev/null
++++ b/src/components/widgets/qidiBox/QidiBoxNozzle.vue
+@@ -0,0 +1,84 @@
++<template>
++  <!-- Hotend: heat break, heater block (where the strand ends), nozzle nut, and a tip in the loaded filament's
++       color. -->
++  <svg
++    width="24"
++    height="31"
++    viewBox="0 0 20 26"
++    class="qidi-box-nozzle"
++    :class="{ 'qidi-box-nozzle--active': color != null }"
++  >
++    <rect
++      x="7.5"
++      y="0.75"
++      width="5"
++      height="6"
++      rx="1"
++      class="qidi-box-nozzle__break"
++    />
++    <rect
++      x="1.75"
++      y="6.75"
++      width="16.5"
++      height="11"
++      rx="2"
++      class="qidi-box-nozzle__block"
++    />
++    <path
++      d="M4.5 18.5h11V21h-11Z"
++      class="qidi-box-nozzle__nut"
++    />
++    <path
++      d="M6 21h8l-3.3 4.5H9.3Z"
++      class="qidi-box-nozzle__tip"
++      :style="color != null ? { fill: color } : undefined"
++    />
++  </svg>
++</template>
++
++<script lang="ts">
++import { Component, Prop, Vue } from 'vue-property-decorator'
++
++@Component({})
++export default class QidiBoxNozzle extends Vue {
++  @Prop({ type: String, default: null })
++  readonly color!: string | null
++}
++</script>
++
++<style lang="scss" scoped>
++.qidi-box-nozzle {
++  --qidi-box-nozzle-metal: var(--qidi-box-muted);
++
++  overflow: visible;
++}
++
++.qidi-box-nozzle--active {
++  --qidi-box-nozzle-metal: var(--qidi-box-contrast);
++}
++
++.qidi-box-nozzle__break {
++  fill: var(--qidi-box-surface);
++  stroke: var(--qidi-box-nozzle-metal);
++  stroke-width: 1.5;
++}
++
++.qidi-box-nozzle__block {
++  fill: var(--qidi-box-block);
++  stroke: var(--qidi-box-nozzle-metal);
++  stroke-width: 1.5;
++}
++
++.qidi-box-nozzle__nut {
++  fill: var(--qidi-box-nozzle-metal);
++}
++
++.qidi-box-nozzle__tip {
++  fill: var(--qidi-box-muted);
++}
++
++.qidi-box-nozzle--active .qidi-box-nozzle__tip {
++  stroke: var(--qidi-box-edge);
++  stroke-width: 1;
++}
++</style>
+diff --git a/src/components/widgets/qidiBox/QidiBoxSpool.vue b/src/components/widgets/qidiBox/QidiBoxSpool.vue
+new file mode 100644
+index 0000000..f3b7e1e
+--- /dev/null
++++ b/src/components/widgets/qidiBox/QidiBoxSpool.vue
+@@ -0,0 +1,180 @@
++<template>
++  <!-- A slot's spool: a ring in the filament color, the label in its hole. The hole turns primary when the slot is
++       loaded, a dashed amber ring spins while the Box reads its RFID, and an empty slot is a dashed, hatched ring. -->
++  <span
++    class="qidi-box-spool"
++    :class="classes"
++    :style="{ width: `${size}px`, height: `${size}px`, background: boxSlot.present ? (boxSlot.color || '#9e9e9e') : undefined }"
++    :data-port="port"
++  >
++    <span
++      v-if="boxSlot.reading"
++      class="qidi-box-spool__rfid"
++    />
++    <span
++      v-if="reloadGroup"
++      class="qidi-box-spool__reload"
++      :style="{ background: reloadGroup.color || 'transparent', color: reloadTextColor }"
++      :title="reloadTitle"
++    >
++      {{ reloadGroup.letter }}
++    </span>
++    <span
++      class="qidi-box-spool__hole"
++      :class="{ 'qidi-box-spool__hole--loaded': loaded }"
++      :style="{ width: `${hole}px`, height: `${hole}px`, fontSize: `${Math.round(hole * 0.42)}px` }"
++    >
++      {{ label }}
++    </span>
++  </span>
++</template>
++
++<script lang="ts">
++import { Component, Prop, Vue } from 'vue-property-decorator'
++import {
++  qidiBoxSlotLabel,
++  qidiColorNearBackground,
++  qidiTextColor,
++  type QidiBoxReloadGroup,
++  type QidiBoxSlot
++} from '@/util/qidi-box'
++
++@Component({})
++export default class QidiBoxSpool extends Vue {
++  @Prop({ type: Object, required: true })
++  readonly boxSlot!: QidiBoxSlot
++
++  @Prop({ type: Number, default: 44 })
++  readonly size!: number
++
++  // The hole's share of the spool's diameter.
++  @Prop({ type: Number, default: 0.52 })
++  readonly holeRatio!: number
++
++  @Prop({ type: String, default: '' })
++  readonly label!: string
++
++  @Prop({ type: Boolean })
++  readonly loaded!: boolean
++
++  @Prop({ type: Boolean })
++  readonly selected!: boolean
++
++  @Prop({ type: Object, default: null })
++  readonly reloadGroup!: QidiBoxReloadGroup | null
++
++  @Prop({ type: String })
++  readonly port?: string
++
++  get hole (): number {
++    return Math.round(this.size * this.holeRatio)
++  }
++
++  get classes () {
++    return {
++      'qidi-box-spool--empty': !this.boxSlot.present,
++      'qidi-box-spool--contrast': this.boxSlot.present && qidiColorNearBackground(this.boxSlot.color, this.$vuetify.theme.dark),
++      'qidi-box-spool--selected': this.selected
++    }
++  }
++
++  get reloadTextColor (): string {
++    return qidiTextColor(this.reloadGroup?.color ?? null)
++  }
++
++  get reloadTitle (): string | undefined {
++    const group = this.reloadGroup
++
++    return group
++      ? this.$t('app.qidi_box.msg.reload_group', { group: group.letter, slots: group.members.map(qidiBoxSlotLabel).join(', ') }).toString()
++      : undefined
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.qidi-box-spool {
++  position: relative;
++  display: inline-flex;
++  flex: none;
++  align-items: center;
++  justify-content: center;
++  border-radius: 50%;
++  box-shadow: inset 0 0 0 1px var(--qidi-box-edge);
++}
++
++.qidi-box-spool--contrast {
++  box-shadow: 0 0 0 1.5px var(--qidi-box-contrast);
++}
++
++.qidi-box-spool--empty {
++  border: 2px dashed var(--qidi-box-muted);
++  box-shadow: none;
++  background-image: repeating-linear-gradient(135deg, transparent 0 4px, var(--qidi-box-tint) 4px 7px);
++}
++
++.qidi-box-spool--selected {
++  outline: 2px solid currentColor;
++  outline-offset: 3px;
++}
++
++.qidi-box-spool__hole {
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  border-radius: 50%;
++  background: var(--qidi-box-surface);
++  box-shadow: 0 0 0 1px var(--qidi-box-edge);
++  font-weight: 700;
++  line-height: 1;
++}
++
++.qidi-box-spool--empty .qidi-box-spool__hole {
++  box-shadow: none;
++  color: var(--qidi-box-muted);
++}
++
++// Ringed in the card color, so the primary hole stands out on a spool of a similar color.
++.qidi-box-spool__hole--loaded {
++  background: var(--v-primary-base);
++  box-shadow: 0 0 0 2px var(--qidi-box-surface);
++  color: #fff;
++}
++
++.qidi-box-spool__rfid {
++  position: absolute;
++  inset: -5px;
++  border: 2px dashed #ffb300;
++  border-radius: 50%;
++  animation: qidi-box-spool-spin 6s linear infinite;
++}
++
++.qidi-box-spool__reload {
++  position: absolute;
++  top: -4px;
++  right: -7px;
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  min-width: 16px;
++  height: 16px;
++  padding: 0 4px;
++  border-radius: 8px;
++  box-shadow: 0 0 0 1px var(--qidi-box-edge);
++  font-size: 10px;
++  font-weight: 700;
++  line-height: 1;
++}
++
++@keyframes qidi-box-spool-spin {
++  to {
++    transform: rotate(360deg);
++  }
++}
++
++@media (prefers-reduced-motion: reduce) {
++  .qidi-box-spool__rfid {
++    animation: none;
++  }
++}
++</style>
+diff --git a/src/components/widgets/qidiBox/QidiBoxUnit.vue b/src/components/widgets/qidiBox/QidiBoxUnit.vue
+new file mode 100644
+index 0000000..1d0be58
+--- /dev/null
++++ b/src/components/widgets/qidiBox/QidiBoxUnit.vue
+@@ -0,0 +1,304 @@
++<template>
++  <!-- One Box, or the external spool: a header with the Box's climate, then a spool per slot with its tools above
++       and its inlet sensor on the frame edge facing the filament path. Below the path the unit is mirrored. -->
++  <div
++    class="qidi-box-unit"
++    :class="{ 'qidi-box-unit--below': below, 'qidi-box-unit--external': external }"
++  >
++    <div class="qidi-box-unit__head">
++      <span class="qidi-box-unit__title">{{ title }}</span>
++      <template v-if="climate">
++        <span
++          v-if="climate.humidity != null"
++          class="qidi-box-unit__climate"
++          :title="humidityLevel(climate.humidity).label"
++        >
++          <v-icon
++            small
++            :color="humidityLevel(climate.humidity).color"
++          >
++            $qidiBoxHumidity
++          </v-icon>
++          {{ climate.humidity }}%
++        </span>
++        <span
++          v-if="climate.temperature != null"
++          class="qidi-box-unit__climate"
++        >
++          <v-icon
++            small
++            class="deep-orange--text text--lighten-2"
++          >
++            $thermometer
++          </v-icon>
++          {{ climate.temperature }}°C
++        </span>
++        <span
++          v-if="climate.target != null"
++          class="qidi-box-unit__climate"
++        >
++          <v-icon
++            small
++            class="red--text"
++          >
++            $fire
++          </v-icon>
++          {{ climate.target }}°C
++        </span>
++      </template>
++    </div>
++
++    <div class="qidi-box-unit__slots">
++      <div
++        v-for="slot in slots"
++        :key="slot.index"
++        class="qidi-box-unit__slot"
++        :class="{ 'qidi-box-unit__slot--loaded': slot.index === loadedSlot }"
++        :style="{ width: `${columnWidth}px` }"
++        role="button"
++        tabindex="0"
++        :aria-pressed="slot.index === selected ? 'true' : 'false'"
++        :title="slotTitle(slot)"
++        @click="$emit('select', slot.index)"
++        @keydown.enter.space.prevent="$emit('select', slot.index)"
++      >
++        <span class="qidi-box-unit__tools">
++          <button
++            v-for="tool in toolsBySlot[slot.index] || []"
++            :key="tool"
++            type="button"
++            class="qidi-box-unit__tool"
++            :class="{ 'qidi-box-unit__tool--loaded': slot.index === loadedSlot }"
++            :title="`${tool} → ${slot.label}`"
++            @click.stop="$emit('tool-click', { tool: Number(tool.slice(1)), slot: slot.index })"
++          >
++            {{ tool }}
++          </button>
++        </span>
++        <span
++          v-if="!labelInHole"
++          class="qidi-box-unit__label"
++        >
++          {{ slot.label }}
++        </span>
++        <qidi-box-spool
++          :box-slot="slot"
++          :size="spoolSize"
++          :label="labelInHole ? slot.label : ''"
++          :loaded="slot.index === loadedSlot"
++          :selected="slot.index === selected"
++          :reload-group="reloadGroups[slot.index] || null"
++        />
++        <span
++          class="qidi-box-unit__inlet"
++          :class="{
++            'qidi-box-unit__inlet--present': slot.present,
++            'qidi-box-unit__inlet--hidden': external
++          }"
++          :data-port="external ? 'ext' : `inlet:${slot.index}`"
++          :title="external ? undefined : $t('app.qidi_box.label.slot_inlet').toString()"
++        />
++      </div>
++    </div>
++  </div>
++</template>
++
++<script lang="ts">
++import { Component, Prop, Vue } from 'vue-property-decorator'
++import type { QidiBoxClimate, QidiBoxReloadGroups, QidiBoxSlot } from '@/util/qidi-box'
++import { qidiBoxFlowColumnWidth } from '@/util/qidi-box-flow'
++import QidiBoxSpool from './QidiBoxSpool.vue'
++
++@Component({
++  components: {
++    QidiBoxSpool
++  }
++})
++export default class QidiBoxUnit extends Vue {
++  @Prop({ type: String, required: true })
++  readonly title!: string
++
++  @Prop({ type: Array, required: true })
++  readonly slots!: QidiBoxSlot[]
++
++  @Prop({ type: Number, required: true })
++  readonly selected!: number
++
++  @Prop({ type: Number, default: null })
++  readonly loadedSlot!: number | null
++
++  @Prop({ type: Object, required: true })
++  readonly toolsBySlot!: Record<number, string[]>
++
++  @Prop({ type: Object, required: true })
++  readonly reloadGroups!: QidiBoxReloadGroups
++
++  @Prop({ type: Object, default: null })
++  readonly climate!: QidiBoxClimate | null
++
++  @Prop({ type: Number, default: 44 })
++  readonly spoolSize!: number
++
++  // Below the filament path: header at the bottom, inlets on the top edge.
++  @Prop({ type: Boolean })
++  readonly below!: boolean
++
++  @Prop({ type: Boolean })
++  readonly external!: boolean
++
++  get columnWidth (): number {
++    return qidiBoxFlowColumnWidth(this.spoolSize)
++  }
++
++  // Small spools put the label above instead.
++  get labelInHole (): boolean {
++    return this.spoolSize >= 40
++  }
++
++  slotTitle (slot: QidiBoxSlot): string {
++    return slot.present
++      ? [slot.label, slot.vendor, slot.name].filter(Boolean).join(' · ')
++      : `${slot.label} · ${this.$t('app.qidi_box.label.empty')}`
++  }
++
++  // QIDI's Box humidity guide: below 40 %RH is normal, below 60 %RH slightly high, and above that high.
++  humidityLevel (humidity: number) {
++    if (humidity < 40) return { color: 'blue lighten-2', label: this.$t('app.qidi_box.humidity.normal').toString() }
++    if (humidity < 60) return { color: '#5475FF', label: this.$t('app.qidi_box.humidity.high').toString() }
++
++    return { color: '#FF4D4D', label: this.$t('app.qidi_box.humidity.over_high').toString() }
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.qidi-box-unit {
++  position: relative;
++  display: flex;
++  flex-direction: column;
++  padding: 8px;
++  border-radius: 12px;
++  box-shadow: inset 0 0 0 1px var(--qidi-box-line);
++}
++
++.qidi-box-unit--below {
++  flex-direction: column-reverse;
++}
++
++.qidi-box-unit--external {
++  min-width: 80px;
++}
++
++.qidi-box-unit__head {
++  display: flex;
++  flex-wrap: wrap;
++  align-items: center;
++  gap: 2px 8px;
++  padding: 0 4px 6px;
++  font-size: 12px;
++}
++
++.qidi-box-unit--below .qidi-box-unit__head {
++  padding: 6px 4px 0;
++}
++
++.qidi-box-unit__title {
++  margin-right: auto;
++  font-size: 13px;
++  font-weight: 500;
++}
++
++.qidi-box-unit__climate {
++  display: inline-flex;
++  align-items: center;
++  gap: 2px;
++  white-space: nowrap;
++  opacity: 0.8;
++}
++
++.qidi-box-unit__slots {
++  display: flex;
++  justify-content: space-around;
++  gap: 4px;
++}
++
++.qidi-box-unit__slot {
++  display: flex;
++  flex-direction: column;
++  align-items: center;
++  gap: 5px;
++  padding-top: 4px;
++  border-radius: 8px;
++  cursor: pointer;
++  outline: none;
++}
++
++.qidi-box-unit--below .qidi-box-unit__slot {
++  flex-direction: column-reverse;
++  padding: 0 0 4px;
++}
++
++.qidi-box-unit__slot:hover,
++.qidi-box-unit__slot:focus-visible {
++  background: var(--qidi-box-tint);
++}
++
++.qidi-box-unit__tools {
++  display: flex;
++  justify-content: center;
++  gap: 2px;
++  height: 16px;
++  white-space: nowrap;
++}
++
++.qidi-box-unit__tool {
++  height: 16px;
++  padding: 0 3px;
++  border-radius: 4px;
++  background: var(--qidi-box-tint);
++  color: inherit;
++  font-size: 9.5px;
++  font-weight: 600;
++  line-height: 16px;
++  opacity: 0.8;
++}
++
++.qidi-box-unit__tool--loaded {
++  background: var(--v-primary-base);
++  color: #fff;
++  opacity: 1;
++}
++
++.qidi-box-unit__label {
++  font-size: 11px;
++  font-weight: 700;
++}
++
++.qidi-box-unit__slot--loaded .qidi-box-unit__label {
++  color: var(--v-primary-base);
++}
++
++// The inlet sensor sits centred on the frame edge: it overhangs the column by the frame padding plus half its size.
++.qidi-box-unit__inlet {
++  flex: none;
++  width: 9px;
++  height: 9px;
++  margin: 2px 0 -13px;
++  border-radius: 50%;
++  background: var(--qidi-box-surface);
++  box-shadow: inset 0 0 0 1.5px var(--qidi-box-muted);
++}
++
++.qidi-box-unit--below .qidi-box-unit__inlet {
++  margin: -13px 0 2px;
++}
++
++.qidi-box-unit__inlet--present {
++  background: var(--qidi-box-muted);
++  box-shadow: none;
++}
++
++.qidi-box-unit__inlet--hidden {
++  visibility: hidden;
++}
++</style>
+diff --git a/src/globals.ts b/src/globals.ts
+index ed39791..1d2ac92 100644
+--- a/src/globals.ts
++++ b/src/globals.ts
+@@ -347,6 +347,9 @@ export const Globals = Object.freeze({
+   GITHUB_REPO: 'https://github.com/fluidd-core/fluidd'
+ })
+ 
++// QIDI Box outline, from Valve Oil's Fluidd.
++const qidiBoxIcon = 'M2 12V5.75L3.5 4.25H20.5L22 5.75V12H20.75V6.27L19.98 5.5H4.02L3.25 6.27V12ZM4.85 6.25H6.55A0.9 0.9 0 0 1 7.45 7.15V11.1A0.9 0.9 0 0 1 6.55 12H4.85A0.9 0.9 0 0 1 3.95 11.1V7.15A0.9 0.9 0 0 1 4.85 6.25ZM9.05 6.25H10.75A0.9 0.9 0 0 1 11.65 7.15V11.1A0.9 0.9 0 0 1 10.75 12H9.05A0.9 0.9 0 0 1 8.15 11.1V7.15A0.9 0.9 0 0 1 9.05 6.25ZM13.25 6.25H14.95A0.9 0.9 0 0 1 15.85 7.15V11.1A0.9 0.9 0 0 1 14.95 12H13.25A0.9 0.9 0 0 1 12.35 11.1V7.15A0.9 0.9 0 0 1 13.25 6.25ZM17.45 6.25H19.15A0.9 0.9 0 0 1 20.05 7.15V11.1A0.9 0.9 0 0 1 19.15 12H17.45A0.9 0.9 0 0 1 16.55 11.1V7.15A0.9 0.9 0 0 1 17.45 6.25ZM10.25 12.5H13.75V14.5H10.25ZM1.5 13.25H22.5V18.25A1 1 0 0 1 21.5 19.25H2.5A1 1 0 0 1 1.5 18.25ZM3.5 16.25V17H8.5V16.25ZM3.5 19.25H5.5V19.75H3.5ZM18.5 19.25H20.5V19.75H18.5Z'
++
+ export const Icons = Object.freeze({
+   dash: mdiViewDashboardOutline,
+   account: mdiAccount,
+@@ -589,6 +592,8 @@ export const Icons = Object.freeze({
+   afcEjectFilament: mdiEject,
+   afcSelectTool: mdiRadioboxBlank,
+   afcUnselectTool: mdiSwapHorizontalVariant,
++  qidiBox: qidiBoxIcon,
++  qidiBoxHumidity: mdiWater,
+ })
+ 
+ export const Waits = Object.freeze({
+diff --git a/src/locales/en.yaml b/src/locales/en.yaml
+index 217e550..5f4dac1 100644
+--- a/src/locales/en.yaml
++++ b/src/locales/en.yaml
+@@ -1456,6 +1456,221 @@ app:
+       show_logos: Show Logos
+       show_climate: Show Climate Info
+       show_unavailable_spool_color: Show Unavailable Spools
++  qidi_box:
++    btn:
++      apply: Apply
++      box_settings: Box settings
++      close: Close
++      cut: Cut
++      default: Default
++      edit: Edit
++      edit_filament: Edit filament
++      eject: Eject
++      jog_in: In {distance} mm
++      jog_in_short: In
++      jog_out: Out {distance} mm
++      jog_out_short: Out
++      load: Load
++      read_rfid: Read RFID
++      reset: Reset
++      reset_slot: Reset slot
++      retry: Retry
++      stop: Stop
++      unload: Unload
++      write_tag: Write spool tag
++      write_tag_hide: Hide
++      write_tag_retry: Try again
++      write_tag_start: Write tag
++    label:
++      box: Box %{box}
++      color: Color
++      colors: Colors · up to four for a multicolor spool
++      add_color: Add a color
++      remove_color: Remove color
++      custom_color: Custom color
++      empty: Empty
++      external: External
++      external_spool: External spool
++      extruder: Extruder
++      filament: Filament
++      hub: Hub
++      loaded: loaded
++      no_tool: no tool
++      not_mapped: Not mapped
++      nozzle: Nozzle
++      slot: Slot %{slot}
++      slot_inlet: Slot inlet
++      toolhead: Toolhead
++      toolhead_sensor: Toolhead sensor
++      unknown_filament: Unknown filament
++      use_box: Use QIDI Box
++      vendor: Vendor
++    humidity:
++      normal: Normal humidity
++      high: Slightly high humidity
++      over_high: High humidity
++    motion:
++      accel: accel
++      all_slots: All slots. Blank fields use the vendor value.
++      fields:
++        approach_speed: Approach speed
++        hub_speed: Hub push speed
++        fast_length: Fast length
++        fast_speed: Fast speed
++        fast_speed_1: Fast speed 1
++        fast_speed_2: Fast speed 2
++        load_accel: Load accel
++        park_speed: Park speed
++        unload_accel: Unload accel
++        unload_extruder_length: Extruder retract
++        unload_speed: Unload speed
++        unload_speed_1: Unload speed 1
++        unload_speed_2: Unload speed 2
++      invalid_saved: Saved value %{value} is invalid; Apply clears it
++      load: Load
++      printing: Editing is unavailable while printing.
++      reset_confirm: >-
++        Reset all Box motion settings and every slot override to vendor values?
++      reset_slot_confirm: Clear every override for slot %{slot}?
++      slot_blank: Blank fields follow the global setting.
++      slot_override: Slot override
++      title: Load/unload motion
++      unavailable: Box motion settings unavailable
++      unload: Unload
++      vendor_keys: 'Vendor motion keys change the baseline: %{keys}'
++      whole_number: Whole number %{range}
++    msg:
++      auto_reload_off: Automatic reload is off
++      at_hub: At hub %{slot}
++      box_busy: Box busy
++      box_drying: Box heating up to %{temp}°C
++      box_error: '%{message} (%{code})'
++      choose_slots: >-
++        Choose the Box slot for each filament in the file. Only loaded slots of
++        the same filament type are listed; slots are matched by nearest color.
++      filament_database_invalid: >-
++        The filament list qidi_filament_config/filament-0.4.json lists no
++        filaments. Check it is valid JSON, then restart the printer.
++      flow_failed_help: Retry runs the step again; Stop ends the Box operation.
++      flow_failed_read_only: Retry or stop it on the touchscreen or on QIDI's page (port 80).
++      read_only: This card only shows the Box. Load, unload and drying are on the touchscreen or QIDI's page (port 80).
++      loaded: Loaded %{slot}
++      missing_slot: >-
++        Choose a Box slot for every filament, or turn off the QIDI Box to print
++        from the external spool.
++      no_external_filament: >-
++        No filament is detected at the toolhead. Load the external spool before
++        printing.
++      no_filament_loaded: No Box filament loaded
++      no_reload_backup: No auto-reload backup
++      nozzle_range: Nozzle %{min}–%{max}°C
++      reading_rfid: Reading RFID…
++      reload_group: 'Auto-reload group %{group}: %{slots}'
++      reload_with: Auto-reload with %{slots}
++      stranded: >-
++        Filament is stopped between the hub and the toolhead. Unload pulls it
++        back into the Box; Eject removes it from the Box.
++      stranded_other: >-
++        %{slot}'s filament is stopped between the hub and the toolhead. Unload
++        or eject %{slot} first.
++      stranded_slot: >-
++        %{slot}'s filament is stopped between the hub and the toolhead. Unload
++        pulls it back into the Box; Eject removes it from the Box.
++      tool_mapping_help: >-
++        Choose the slot each tool loads, for tool changes and prints that do not
++        set their own mapping. Fluidd's print dialog sets the mapping again for
++        the print it starts.
++      tools_not_named: >-
++        This file doesn't say which filaments it uses, so every filament in
++        its slicer project is listed. Any left without a slot keep the slot
++        they were last mapped to.
++    tag:
++      intro: >-
++        Put what's on this spool on its RFID tag. The Box then sets the slot
++        from the tag whenever the spool is loaded, here or in any Box slot.
++      turns: >-
++        The Box turns the spool backward until its tag comes past the reader,
++        about one turn at most.
++      by_hand: >-
++        Filament is fed from this slot, so the Box can't turn the spool. Once
++        you start, turn it slowly backward by hand for up to a minute.
++      rules: >-
++        The tag must be on the side of the spool facing the reader. Only blank
++        tags and tags Valve Oil wrote before are written.
++      turning: Turning the spool to find its tag…
++      turning_progress: '%{turned} of %{turn} mm'
++      by_hand_running: Turn the spool slowly backward by hand…
++      seconds_left: '%{seconds} s left'
++      lost: >-
++        The tag moved away before it could be written; trying again as it comes
++        past.
++      done: >-
++        Tag written and checked. Whenever this spool is loaded into a Box slot,
++        the slot is set to %{filament}.
++      not_found: >-
++        No tag came past the reader. The Box reads a tag only on the side of the
++        spool facing the reader. If the tag is on the other side, turn the spool
++        over and try again.
++      refused_brand: >-
++        Tag not written. It holds %{brand} data, which the Box already reads.
++        Valve Oil writes only blank tags and tags it wrote before.
++      refused_bambu: >-
++        Tag not written. It's a Bambu Lab tag, which the Box already reads.
++        Bambu tags can't be rewritten.
++      refused_locked: Tag not written. The tag is locked against writing.
++      refused_unsupported: >-
++        Tag not written. The Box can't write this kind of tag. Use a MIFARE
++        Classic 1K or NTAG213, 215, or 216 tag.
++      refused_other: >-
++        Tag not written. The tag holds data Valve Oil doesn't write over.
++      unverified: >-
++        Tag not written. It didn't read back as written; it may have moved away
++        mid-write. Try again.
++    settings:
++      auto_init_detect: Detection on startup
++      auto_init_detect_help: >-
++        On every startup, the Box reads the filament information of every slot,
++        which takes about 1 minute.
++      auto_read_rfid: Detection on insertion
++      auto_read_rfid_help: >-
++        When filament is inserted, the Box reads its filament information, which
++        takes about 20 seconds.
++      auto_reload_detect: Automatic reload
++      auto_reload_detect_help: >-
++        When filament runs out, the Box switches to a slot with the same
++        filament, vendor, and color.
++      title: Box settings
++      vo_box_spool_roll: Turn spools while heating
++      vo_box_spool_roll_help: >-
++        While the Box heater is on, including during a print, each empty slot
++        turns its spool every 5 minutes. Slots with filament fed never turn.
++    step:
++      bite: Gripping the external spool's filament
++      cut: Cutting filament
++      eject: Ejecting filament
++      eject_slot: Ejecting %{slot}
++      failed: '%{step} failed'
++      failed_unknown: Box step failed
++      heat: Heating nozzle
++      heat_external: Heating nozzle for the external spool
++      heat_slot: Heating nozzle for %{slot}
++      heat_temp: Heating nozzle to %{temp} °C
++      heat_temp_external: Heating nozzle to %{temp} °C for the external spool
++      heat_temp_slot: Heating nozzle to %{temp} °C for %{slot}
++      load: Loading filament
++      load_external: Loading the external spool
++      load_slot: Loading %{slot}
++      purge: Purging
++      unload: Unloading filament
++      unload_external: Unloading the external spool
++      unload_slot: Unloading %{slot}
++      wipe: Wiping nozzle
++      working: Working…
++    title:
++      edit_slot: Edit slot %{slot}
++      write_tag: Write %{slot}'s spool tag
++      qidi_box: QIDI Box
++      tool_mapping: Tool mapping
+   sensors:
+     title:
+       sensors: Sensors
+diff --git a/src/store/index.ts b/src/store/index.ts
+index a14922c..d2e329f 100644
+--- a/src/store/index.ts
++++ b/src/store/index.ts
+@@ -33,6 +33,7 @@ import { sensors } from './sensors'
+ import { database } from './database'
+ import { analysis } from './analysis'
+ import { afc } from './afc'
++import { qidiBox } from './qidiBox'
+ 
+ Vue.use(Vuex)
+ 
+@@ -67,7 +68,8 @@ export const storeOptions = {
+     sensors,
+     database,
+     analysis,
+-    afc
++    afc,
++    qidiBox
+   } satisfies RootModules,
+   mutations: {},
+   actions: {
+diff --git a/src/store/layout/state.ts b/src/store/layout/state.ts
+index 36e57ac..9575b05 100644
+--- a/src/store/layout/state.ts
++++ b/src/store/layout/state.ts
+@@ -55,6 +55,7 @@ export const createState = (): LayoutState => {
+       dashboard: {
+         container1: [
+           { id: 'printer-status-card', enabled: true, collapsed: false },
++          { id: 'box-card', enabled: true, collapsed: false },
+           { id: 'spoolman-card', enabled: true, collapsed: false },
+           { id: 'mmu-card', enabled: true, collapsed: false },
+           { id: 'camera-card', enabled: true, collapsed: false },
+diff --git a/src/store/qidiBox/actions.ts b/src/store/qidiBox/actions.ts
+new file mode 100644
+index 0000000..063ff4f
+--- /dev/null
++++ b/src/store/qidiBox/actions.ts
+@@ -0,0 +1,20 @@
++import type { ActionTree } from 'vuex'
++import type { RootState } from '../types'
++import type { QidiBoxState } from './types'
++
++export const actions = {
++  /**
++   * Reset our store
++   */
++  async reset ({ commit }) {
++    commit('setReset')
++  },
++
++  /**
++   * Klipper and the touchscreen read the filament files when they start, so the Box card reads them again after
++   * a Klipper restart or a dropped connection, such as a printer reboot
++   */
++  async resetFilaments ({ commit }) {
++    commit('setResetFilaments')
++  }
++} satisfies ActionTree<QidiBoxState, RootState>
+diff --git a/src/store/qidiBox/getters.ts b/src/store/qidiBox/getters.ts
+new file mode 100644
+index 0000000..a3c76db
+--- /dev/null
++++ b/src/store/qidiBox/getters.ts
+@@ -0,0 +1,169 @@
++import type { GetterTree } from 'vuex'
++import type { QidiBoxState } from './types'
++import type { RootState } from '../types'
++import {
++  QIDI_BOX_EXTERNAL_SLOT,
++  qidiBoxSlotNumber,
++  qidiBoxSlots,
++  qidiBoxToolButtons,
++  type QidiBoxSlot,
++  type QidiBoxToolButton
++} from '@/util/qidi-box'
++import {
++  qidiBoxHubSensor,
++  qidiBoxHubSlot,
++  qidiBoxLastError,
++  qidiBoxLoadedSlot,
++  qidiBoxStrandedRecovery,
++  qidiBoxTask,
++  qidiBoxTaskText,
++  qidiBoxWarnings,
++  type QidiBoxError,
++  type QidiBoxStepText,
++  type QidiBoxTask
++} from '@/util/qidi-box-task'
++
++export const getters = {
++  getBoxCount: (state, getters, rootState): number => {
++    const boxCount = Number(rootState.printer.printer.save_variables?.variables?.box_count ?? 0)
++
++    return Number.isFinite(boxCount) ? Math.max(0, Math.min(4, boxCount)) : 0
++  },
++
++  getEnabled: (state, getters, rootState): boolean => {
++    return Number(rootState.printer.printer.save_variables?.variables?.enable_box ?? 0) === 1
++  },
++
++  // Firmware 01.01.07.01 drives the Box through multi_color_controller and stores QF filament IDs.
++  getHasController: (state, getters, rootState): boolean => {
++    return rootState.printer.printer.multi_color_controller != null
++  },
++
++  getSlots: (state, getters, rootState): QidiBoxSlot[] => {
++    return qidiBoxSlots(rootState.printer.printer, state.filamentList)
++  },
++
++  getSlot: (state, getters) => (index: number): QidiBoxSlot | undefined => {
++    return (getters.getSlots as QidiBoxSlot[]).find(slot => slot.index === index)
++  },
++
++  // Box N's heater may not exceed the lowest Box temperature limit among its loaded filaments, as on the
++  // touchscreen; a limit of 0 forbids heating. Null when no loaded filament has a known limit.
++  getHeaterLimit: (state, getters) => (box: number): number | null => {
++    const limits = (getters.getSlots as QidiBoxSlot[])
++      .filter(slot => slot.index !== QIDI_BOX_EXTERNAL_SLOT && Math.floor(slot.index / 4) === box - 1 && slot.present)
++      .map(slot => slot.boxMaxTemp)
++      .filter((limit): limit is number => limit != null)
++
++    return limits.length ? Math.min(...limits) : null
++  },
++
++  // value_tN maps tool N to the slot it loads.
++  getToolMap: (state, getters, rootState): Record<number, number> => {
++    const variables: Record<string, unknown> = rootState.printer.printer.save_variables?.variables ?? {}
++    const map: Record<number, number> = {}
++
++    for (let tool = 0; tool < 16; tool++) {
++      const slot = qidiBoxSlotNumber(variables[`value_t${tool}`])
++
++      if (slot != null) map[tool] = slot
++    }
++
++    return map
++  },
++
++  // QIDI defines T0 through T15 whatever Boxes are connected, so the toolhead's tool buttons follow the Box instead.
++  getManagesTools: (state, getters, rootState): boolean => {
++    const printer = rootState.printer.printer
++
++    return printer.save_variables?.variables?.box_count != null || printer.multi_color_controller != null
++  },
++
++  // T_MANAGER does nothing while the Box is disabled.
++  getToolButtons: (state, getters, rootState): QidiBoxToolButton[] => {
++    if (!getters.getEnabled) return []
++
++    const currentTool = Number(rootState.printer.printer.save_variables?.variables?.extrude_state)
++
++    return qidiBoxToolButtons(
++      getters.getToolMap,
++      getters.getSlots,
++      getters.getLoadedSlot,
++      Number.isInteger(currentTool) ? currentTool : null
++    )
++  },
++
++  getToolheadFilament: (state, getters, rootState): boolean => {
++    return rootState.printer.printer['filament_switch_sensor filament_switch_sensor']?.filament_detected === true
++  },
++
++  // The slot feeding the extruder.
++  getLoadedSlot: (state, getters, rootState): number | null => {
++    return qidiBoxLoadedSlot(rootState.printer.printer, getters.getSlots)
++  },
++
++  getLastLoadSlot: (state, getters, rootState): number | null => {
++    return qidiBoxSlotNumber(rootState.printer.printer.save_variables?.variables?.last_load_slot)
++  },
++
++  // Hub sensor; 0 while filament is at the hub. Firmware 01.01.07.01 publishes it only on multi_color_controller.
++  getHubSensor: (state, getters, rootState): number | null => {
++    return qidiBoxHubSensor(rootState.printer.printer)
++  },
++
++  // The Box slot whose filament is at the hub when no Box slot is loaded; only meaningful while the hub sees one.
++  getHubSlot: (state, getters, rootState): number | null => {
++    return qidiBoxHubSlot(rootState.printer.printer, getters.getSlots)
++  },
++
++  getAutoReload: (state, getters, rootState): boolean => {
++    return Number(rootState.printer.printer.save_variables?.variables?.auto_reload_detect ?? 0) === 1
++  },
++
++  // The running Box flow, or the one paused on a failed step.
++  getTask: (state, getters, rootState): QidiBoxTask | null => {
++    return qidiBoxTask(rootState.printer.printer)
++  },
++
++  getTaskText: (state, getters, rootState): QidiBoxStepText | null => {
++    return qidiBoxTaskText(rootState.printer.printer)
++  },
++
++  getFlowPaused: (state, getters): boolean => {
++    return getters.getTask?.paused === true
++  },
++
++  // The error QIDI reported in the console for the failed step.
++  getLastError: (state, getters, rootState): QidiBoxError | null => {
++    return getters.getFlowPaused ? qidiBoxLastError(rootState.console.console.map(entry => entry.message)) : null
++  },
++
++  getWarnings: (state, getters, rootState): string[] => {
++    return qidiBoxWarnings(rootState.printer.printer.multi_color_controller?.box_warning_info)
++  },
++
++  getBusy: (state, getters, rootState, rootGetters): boolean => {
++    return !rootGetters['printer/getKlippyReady'] ||
++      rootState.printer.printer.print_stats?.state === 'printing' ||
++      !!rootState.printer.printer.box_extras?.box_button_state ||
++      getters.getTask != null
++  },
++
++  // Filament stranded between the hub and the toolhead can be unloaded or ejected outside a print, even while a
++  // failed flow is paused; a running flow still blocks it. Only firmware 01.01.07.01's commands handle it.
++  getStrandedRecovery: (state, getters, rootState, rootGetters): boolean => {
++    return rootGetters['printer/getKlippyReady'] &&
++      getters.getHasController &&
++      qidiBoxStrandedRecovery(rootState.printer.printer)
++  },
++
++  // Like VO_RESET_TOOL_MAPPINGS, mappings change only while idle, so a paused print keeps its recovery state.
++  getMappingLocked: (state, getters, rootState): boolean => {
++    return getters.getBusy || rootState.printer.printer.print_stats?.state === 'paused'
++  },
++
++  // Every print goes through the Box slot dialog while a Box is connected, so its slots are always chosen.
++  getShowPrintDialog: (state, getters) => (filename: string): boolean => {
++    return filename !== '' && getters.getBoxCount > 0
++  }
++} satisfies GetterTree<QidiBoxState, RootState>
+diff --git a/src/store/qidiBox/index.ts b/src/store/qidiBox/index.ts
+new file mode 100644
+index 0000000..4fdf865
+--- /dev/null
++++ b/src/store/qidiBox/index.ts
+@@ -0,0 +1,15 @@
++import type { Module } from 'vuex'
++import { createState } from './state'
++import { getters } from './getters'
++import { actions } from './actions'
++import { mutations } from './mutations'
++import type { QidiBoxState } from './types'
++import type { RootState } from '../types'
++
++export const qidiBox = {
++  namespaced: true,
++  state: createState,
++  getters,
++  actions,
++  mutations
++} satisfies Module<QidiBoxState, RootState>
+diff --git a/src/store/qidiBox/mutations.ts b/src/store/qidiBox/mutations.ts
+new file mode 100644
+index 0000000..1849226
+--- /dev/null
++++ b/src/store/qidiBox/mutations.ts
+@@ -0,0 +1,33 @@
++import type { MutationTree } from 'vuex'
++import type { QidiBoxDialogState, QidiBoxState } from './types'
++import type { QidiFilament, QidiFilamentList } from '@/util/qidi-box'
++import { createState } from './state'
++
++export const mutations = {
++  /**
++   * Reset state
++   */
++  setReset (state) {
++    Object.assign(state, createState())
++  },
++
++  setResetFilaments (state) {
++    const { filamentList, filamentDatabase, filamentDatabaseInvalid } = createState()
++
++    Object.assign(state, { filamentList, filamentDatabase, filamentDatabaseInvalid })
++  },
++
++  setDialogState (state, payload: QidiBoxDialogState) {
++    state.dialog = payload
++  },
++
++  setFilamentList (state, payload: QidiFilamentList) {
++    state.filamentList = Object.freeze(payload)
++  },
++
++  // Null when the file was read but lists no filaments.
++  setFilamentDatabase (state, payload: QidiFilament[] | null) {
++    state.filamentDatabase = payload && Object.freeze(payload)
++    state.filamentDatabaseInvalid = payload == null
++  }
++} satisfies MutationTree<QidiBoxState>
+diff --git a/src/store/qidiBox/state.ts b/src/store/qidiBox/state.ts
+new file mode 100644
+index 0000000..3f89b71
+--- /dev/null
++++ b/src/store/qidiBox/state.ts
+@@ -0,0 +1,12 @@
++import type { QidiBoxState } from './types'
++
++export const createState = (): QidiBoxState => {
++  return {
++    dialog: {
++      show: false
++    },
++    filamentList: null,
++    filamentDatabase: null,
++    filamentDatabaseInvalid: false
++  }
++}
+diff --git a/src/store/qidiBox/types.ts b/src/store/qidiBox/types.ts
+new file mode 100644
+index 0000000..f3c0c73
+--- /dev/null
++++ b/src/store/qidiBox/types.ts
+@@ -0,0 +1,13 @@
++import type { QidiFilament, QidiFilamentList } from '@/util/qidi-box'
++
++export interface QidiBoxState {
++  dialog: QidiBoxDialogState;
++  filamentList: QidiFilamentList | null;
++  filamentDatabase: readonly QidiFilament[] | null;
++  filamentDatabaseInvalid: boolean;
++}
++
++export interface QidiBoxDialogState {
++  show: boolean;
++  filename?: string;
++}
+diff --git a/src/store/types.ts b/src/store/types.ts
+index 8b4293a..942925c 100644
+--- a/src/store/types.ts
++++ b/src/store/types.ts
+@@ -28,6 +28,7 @@ import type { sensors } from './sensors'
+ import type { database } from './database'
+ import type { analysis } from './analysis'
+ import type { afc } from './afc'
++import type { qidiBox } from './qidiBox'
+ import type { storeOptions } from '.'
+ 
+ // Deliberately spelled out rather than derived from `storeOptions.modules`: those
+@@ -63,6 +64,7 @@ type RootModulesType = {
+   database: typeof database,
+   analysis: typeof analysis,
+   afc: typeof afc
++  qidiBox: typeof qidiBox
+ }
+ 
+ type RootStateType<TModules> = {
+diff --git a/src/util/__tests__/qidi-box-flow.spec.ts b/src/util/__tests__/qidi-box-flow.spec.ts
+new file mode 100644
+index 0000000..87ee604
+--- /dev/null
++++ b/src/util/__tests__/qidi-box-flow.spec.ts
+@@ -0,0 +1,84 @@
++import { qidiColorNearBackground } from '../qidi-box'
++import { qidiBoxFlowConnections, qidiBoxFlowLayout, qidiBoxFlowPath } from '../qidi-box-flow'
++
++describe('qidiBoxFlowLayout', () => {
++  it('puts every unit above the path when they fit in one row', () => {
++    expect(qidiBoxFlowLayout(612, 2)).toEqual({ spoolSize: 44, narrow: false, compact: false, top: [1, 2, 0], bottom: [] })
++  })
++
++  it('splits the Boxes above and below the path, with the external spool below', () => {
++    expect(qidiBoxFlowLayout(612, 4)).toEqual({ spoolSize: 44, narrow: false, compact: false, top: [1, 2], bottom: [3, 4, 0] })
++    expect(qidiBoxFlowLayout(392, 3)).toEqual({ spoolSize: 32, narrow: true, compact: false, top: [1, 2], bottom: [3, 0] })
++  })
++
++  it('falls back to the compact layout when a row cannot fit', () => {
++    expect(qidiBoxFlowLayout(312, 4)).toMatchObject({ compact: true, narrow: true, top: [1, 2, 3, 4, 0], bottom: [] })
++    expect(qidiBoxFlowLayout(0, 1)).toMatchObject({ compact: true })
++  })
++
++  it('shows the external spool alone without Boxes', () => {
++    expect(qidiBoxFlowLayout(290, 0)).toMatchObject({ compact: false, top: [0], bottom: [] })
++  })
++})
++
++describe('qidiBoxFlowConnections', () => {
++  it('draws the path guide only when nothing is loaded', () => {
++    expect(qidiBoxFlowConnections(null, null, false)).toEqual([{ key: 'guide', via: ['hub', 'th', 'ex', 'noz'], dir: 'h', slot: null }])
++  })
++
++  it('draws the loaded slot from its inlet to the nozzle', () => {
++    expect(qidiBoxFlowConnections(1, 1, false).map(({ key, via, slot }) => ({ key, via, slot }))).toEqual([
++      { key: 'guide', via: ['hub', 'th', 'ex', 'noz'], slot: null },
++      { key: 'hub', via: ['inlet:1', 'hub'], slot: 1 },
++      { key: 'toolhead', via: ['hub', 'th', 'ex', 'noz'], slot: 1 }
++    ])
++  })
++
++  it('stops a parked slot at the hub', () => {
++    expect(qidiBoxFlowConnections(5, null, false).map(c => c.key)).toEqual(['guide', 'hub'])
++  })
++
++  it('routes the external spool straight to the toolhead', () => {
++    expect(qidiBoxFlowConnections(null, 16, false).map(({ key, via }) => ({ key, via }))).toEqual([
++      { key: 'guide', via: ['hub', 'th', 'ex', 'noz'] },
++      { key: 'external', via: ['ext', 'th'] },
++      { key: 'toolhead', via: ['th', 'ex', 'noz'] }
++    ])
++  })
++
++  it('drops the slot strands in the compact layout', () => {
++    expect(qidiBoxFlowConnections(1, 1, true).map(c => c.key)).toEqual(['guide', 'toolhead'])
++    expect(qidiBoxFlowConnections(null, 16, true).map(c => c.key)).toEqual(['guide', 'toolhead'])
++  })
++})
++
++describe('qidiBoxFlowPath', () => {
++  it('draws straight lines between aligned points', () => {
++    expect(qidiBoxFlowPath([[0, 10], [50, 10], [90, 10]], 'h')).toBe('M0 10 L50 10 L90 10')
++  })
++
++  it('curves vertically between offset points', () => {
++    expect(qidiBoxFlowPath([[100, 0], [20, 40]], 'v')).toBe('M100 0 C100 20 20 20 20 40')
++  })
++
++  it('curves horizontally between offset points', () => {
++    expect(qidiBoxFlowPath([[0, 0], [40, 20]], 'h')).toBe('M0 0 C20 0 20 20 40 20')
++  })
++
++  it('draws nothing for a single point', () => {
++    expect(qidiBoxFlowPath([[1, 1]], 'h')).toBe('')
++  })
++})
++
++describe('qidiColorNearBackground', () => {
++  it.each([
++    ['#1F1F1F', true, true],
++    ['#1F1F1F', false, false],
++    ['#F2F2F2', false, true],
++    ['#F2F2F2', true, false],
++    ['#FF362D', true, false],
++    [null, true, false]
++  ])('%s on dark=%s is %s', (color, dark, expected) => {
++    expect(qidiColorNearBackground(color, dark)).toBe(expected)
++  })
++})
+diff --git a/src/util/__tests__/qidi-box-task.spec.ts b/src/util/__tests__/qidi-box-task.spec.ts
+new file mode 100644
+index 0000000..c354c7d
+--- /dev/null
++++ b/src/util/__tests__/qidi-box-task.spec.ts
+@@ -0,0 +1,267 @@
++import { qidiBoxSlots } from '../qidi-box'
++import {
++  qidiBoxHubSlot,
++  qidiBoxLastError,
++  qidiBoxLoadedSlot,
++  qidiBoxStranded,
++  qidiBoxStrandedRecovery,
++  qidiBoxTask,
++  qidiBoxTaskText,
++  qidiBoxWarnings
++} from '../qidi-box-task'
++
++// A Max 4 with one Box, slot 1B at its inlet, during a Box flow.
++const printer = (overrides: {
++  task?: Record<string, unknown>,
++  activeSlot?: string,
++  lastLoadSlot?: string,
++  hubSlot?: string,
++  slotSync?: string,
++  target?: number,
++  hub?: number,
++  toolhead?: boolean,
++  printState?: string,
++  inlets?: number[]
++} = {}) => ({
++  save_variables: {
++    variables: {
++      box_count: 1,
++      last_load_slot: overrides.lastLoadSlot ?? 'slot16',
++      vo_box_hub_slot: overrides.hubSlot ?? '',
++      slot_sync: overrides.slotSync ?? 'slot-1'
++    }
++  },
++  multi_color_controller: {
++    task: { flow_id: 3, current_queue: [], current_step: '', is_paused: false, ...overrides.task },
++    operation: { active_slot: overrides.activeSlot ?? 'slot16' },
++    box: { b_endstop_state: overrides.hub ?? 1 }
++  },
++  extruder: { target: overrides.target ?? 0 },
++  print_stats: { state: overrides.printState ?? 'standby' },
++  'filament_switch_sensor filament_switch_sensor': { filament_detected: overrides.toolhead ?? false },
++  ...Object.fromEntries([0, 1, 2, 3].map(index => [
++    `box_stepper slot${index}`,
++    { runout_button: (overrides.inlets ?? [1]).includes(index) ? 0 : 1 }
++  ]))
++})
++
++const taskText = (state: ReturnType<typeof printer>) => qidiBoxTaskText(state)
++
++describe('qidiBoxTask', () => {
++  it('is idle once the flow resets its queue and step, though flow_id stays', () => {
++    expect(qidiBoxTask(printer())).toBeNull()
++  })
++
++  it('reports the running step', () => {
++    expect(qidiBoxTask(printer({ task: { current_queue: ['BOX_HEAT', 'BOX_LOAD'], current_step: 'BOX_HEAT' } })))
++      .toEqual({ step: 'BOX_HEAT', paused: false })
++  })
++
++  it('reports a step that failed and paused the flow', () => {
++    expect(qidiBoxTask(printer({ task: { current_queue: ['BOX_LOAD'], current_step: 'BOX_LOAD', is_paused: true } })))
++      .toEqual({ step: 'BOX_LOAD', paused: true })
++  })
++})
++
++describe('qidiBoxTaskText', () => {
++  const running = (step: string, overrides: Parameters<typeof printer>[0] = {}) =>
++    taskText(printer({ task: { current_queue: [step], current_step: step }, ...overrides }))
++
++  it('names the slot and nozzle target while heating for a Box load', () => {
++    expect(running('BOX_HEAT', { activeSlot: 'slot1', target: 239.6 }))
++      .toEqual({ key: 'heat_temp_slot', params: { temp: 240, slot: '1B' } })
++  })
++
++  it('leaves out a nozzle target that is off', () => {
++    expect(running('BOX_HEAT', { activeSlot: 'slot5' })).toEqual({ key: 'heat_slot', params: { slot: '2B' } })
++  })
++
++  it('names the slot being loaded', () => {
++    expect(running('BOX_LOAD', { activeSlot: 'slot1', lastLoadSlot: 'slot2' })).toEqual({ key: 'load_slot', params: { slot: '1B' } })
++  })
++
++  it('names the last-loaded slot while unloading it for another slot', () => {
++    expect(running('BOX_UNLOAD', { activeSlot: 'slot1', lastLoadSlot: 'slot2' })).toEqual({ key: 'unload_slot', params: { slot: '1C' } })
++  })
++
++  it('names the target slot while unloading when no Box slot was loaded', () => {
++    expect(running('BOX_UNLOAD', { activeSlot: 'slot1' })).toEqual({ key: 'unload_slot', params: { slot: '1B' } })
++  })
++
++  it('names the external spool for its steps', () => {
++    expect(running('EXT_HEAT', { target: 220 })).toEqual({ key: 'heat_temp_external', params: { temp: 220 } })
++    expect(running('EXT_LOAD')).toEqual({ key: 'load_external', params: {} })
++    expect(running('EXT_BITE')).toEqual({ key: 'bite', params: {} })
++  })
++
++  it.each([
++    ['BOX_CUT', 'cut'],
++    ['EXT_CUT', 'cut'],
++    ['BOX_WIPE', 'wipe'],
++    ['EXT_WIPE', 'wipe']
++  ])('describes %s without a slot', (step, key) => {
++    expect(running(step, { activeSlot: 'slot1' })).toEqual({ key, params: {} })
++  })
++
++  it('shows the wipe step purging until Valve Oil reports the chute wipe started', () => {
++    const wipeStep = (wiping?: boolean, paused = false) => taskText({
++      ...printer({ task: { current_queue: ['BOX_WIPE'], current_step: 'BOX_WIPE', is_paused: paused } }),
++      ...(wiping == null ? {} : { tltg_box_flow_recovery: { wiping } })
++    })
++    expect(wipeStep(false)).toEqual({ key: 'purge', params: {} })
++    expect(wipeStep(true)).toEqual({ key: 'wipe', params: {} })
++    expect(wipeStep()).toEqual({ key: 'wipe', params: {} })
++    expect(wipeStep(false, true)).toEqual({ key: 'wipe', params: {} })
++  })
++
++  it('falls back to generic text without a target slot', () => {
++    expect(running('BOX_LOAD')).toEqual({ key: 'load', params: {} })
++    expect(running('BOX_EJECT')).toEqual({ key: 'eject', params: {} })
++  })
++
++  it('falls back to working text for an unknown step', () => {
++    expect(running('BOX_FUTURE_STEP', { activeSlot: 'slot1' })).toEqual({ key: 'working', params: {} })
++  })
++
++  it('describes a failed step the same way', () => {
++    expect(taskText(printer({ task: { current_queue: ['BOX_LOAD'], current_step: 'BOX_LOAD', is_paused: true }, activeSlot: 'slot1' })))
++      .toEqual({ key: 'load_slot', params: { slot: '1B' } })
++  })
++
++  it('has no text while idle', () => {
++    expect(taskText(printer())).toBeNull()
++  })
++})
++
++describe('qidiBoxLastError', () => {
++  it('reads the latest Box error code and message', () => {
++    expect(qidiBoxLastError([
++      '!! Code:QDE_004_001; Message:Old failure.',
++      'Step BOX_LOAD failed. Pausing flow.',
++      '$ FLOW_STOP',
++      '$ LOAD_FILAMENT_CONTROL SLOT=1',
++      '!! Code:QDE_004_006; Message:Extruder loading failure.',
++      '// Step BOX_LOAD failed. Pausing flow.'
++    ])).toEqual({ code: 'QDE_004_006', message: 'Extruder loading failure.' })
++  })
++
++  it('reads an error without a QIDI code reported right after the failure', () => {
++    expect(qidiBoxLastError([
++      '!! Code:QDE_004_001; Message:Old failure.',
++      'Step BOX_LOAD failed. Pausing flow.',
++      '$ LOAD_FILAMENT_CONTROL SLOT=1',
++      '// Step BOX_LOAD failed. Pausing flow.',
++      '!! Error during homing e_endstop: Communication timeout during homing'
++    ])).toEqual({ code: null, message: 'Error during homing e_endstop: Communication timeout during homing' })
++  })
++
++  it('prefers QIDI\'s coded error and ignores unrelated console errors', () => {
++    expect(qidiBoxLastError([
++      '!! Code:QDE_004_006; Message:Extruder loading failure.',
++      '// Step BOX_LOAD failed. Pausing flow.',
++      '!! Must home axis first'
++    ])).toEqual({ code: 'QDE_004_006', message: 'Extruder loading failure.' })
++    expect(qidiBoxLastError([
++      '!! Must home axis first',
++      '$ LOAD_FILAMENT_CONTROL SLOT=1',
++      '// Step BOX_LOAD failed. Pausing flow.'
++    ])).toBeNull()
++  })
++
++  it('ignores an earlier failure\'s error when the current one reported none', () => {
++    expect(qidiBoxLastError([
++      '!! Code:QDE_004_001; Message:Old failure.',
++      'Step BOX_LOAD failed. Pausing flow.',
++      'Step BOX_UNLOAD failed. Pausing flow.'
++    ])).toBeNull()
++  })
++})
++
++describe('qidiBoxWarnings', () => {
++  it('lists QIDI\'s Box warnings once each', () => {
++    expect(qidiBoxWarnings(['Code:QDE_002_001; Message:Box heater fault.', 'Humidity sensor', 'Humidity sensor', ''])).toEqual([
++      'Box heater fault. (QDE_002_001)',
++      'Humidity sensor'
++    ])
++    expect(qidiBoxWarnings(undefined)).toEqual([])
++  })
++})
++
++describe('qidiBoxStranded', () => {
++  it('is stranded with filament at the hub but not the toolhead', () => {
++    expect(qidiBoxStranded(printer({ hub: 0 }))).toBe(true)
++  })
++
++  it.each([
++    ['the hub is empty', { hub: 1 }],
++    ['the toolhead sees filament', { hub: 0, toolhead: true }],
++    ['printing', { hub: 0, printState: 'printing' }],
++    ['a print is paused', { hub: 0, printState: 'paused' }]
++  ])('is not stranded when %s', (_, overrides) => {
++    expect(qidiBoxStranded(printer(overrides))).toBe(false)
++  })
++})
++
++describe('qidiBoxStrandedRecovery', () => {
++  it('allows Unload and Eject with no flow, or with a failed flow paused', () => {
++    expect(qidiBoxStrandedRecovery(printer({ hub: 0 }))).toBe(true)
++    expect(qidiBoxStrandedRecovery(printer({ hub: 0, task: { current_queue: ['BOX_LOAD'], current_step: 'BOX_LOAD', is_paused: true } }))).toBe(true)
++  })
++
++  it('blocks them while a flow runs, as during a normal load', () => {
++    expect(qidiBoxStrandedRecovery(printer({ hub: 0, task: { current_queue: ['BOX_LOAD'], current_step: 'BOX_LOAD' } }))).toBe(false)
++  })
++
++  it('blocks them during a paused print', () => {
++    expect(qidiBoxStrandedRecovery(printer({ hub: 0, printState: 'paused', task: { current_step: 'BOX_LOAD', is_paused: true } }))).toBe(false)
++  })
++})
++
++describe('qidiBoxHubSlot', () => {
++  const hubSlot = (overrides: Parameters<typeof printer>[0]) => {
++    const state = printer({ hub: 0, ...overrides })
++
++    return qidiBoxHubSlot(state, qidiBoxSlots(state, null))
++  }
++
++  it('takes the slot recorded at the hub or the last-loaded slot while its inlet has filament', () => {
++    expect(hubSlot({ hubSlot: 'slot1', lastLoadSlot: 'slot1', inlets: [1, 2] })).toBe(1)
++    expect(hubSlot({ lastLoadSlot: 'slot2', inlets: [1, 2] })).toBe(2)
++    expect(hubSlot({ hubSlot: 'slot1', lastLoadSlot: 'slot2', inlets: [2, 3] })).toBe(2)
++  })
++
++  it('can\'t tell two different named slots apart', () => {
++    expect(hubSlot({ hubSlot: 'slot1', lastLoadSlot: 'slot2', inlets: [1, 2] })).toBeNull()
++  })
++
++  it('falls back to the only slot with filament at its inlet', () => {
++    expect(hubSlot({ inlets: [3] })).toBe(3)
++    expect(hubSlot({ inlets: [1, 3] })).toBeNull()
++  })
++})
++
++describe('qidiBoxLoadedSlot', () => {
++  const loadedSlot = (overrides: Parameters<typeof printer>[0]) => {
++    const state = printer(overrides)
++
++    return qidiBoxLoadedSlot(state, qidiBoxSlots(state, null))
++  }
++
++  it('takes the Box slot synced to the extruder', () => {
++    expect(loadedSlot({ slotSync: 'slot1', hub: 0, toolhead: true })).toBe(1)
++  })
++
++  it('takes the slot at the hub when no slot is synced and the toolhead sees filament, as while printing', () => {
++    expect(loadedSlot({ hub: 0, toolhead: true, lastLoadSlot: 'slot1' })).toBe(1)
++    expect(loadedSlot({ hub: 0, toolhead: true, inlets: [1, 2] })).toBeNull()
++  })
++
++  it('takes the external spool when the toolhead sees filament that isn\'t at the hub', () => {
++    expect(loadedSlot({ hub: 1, toolhead: true, lastLoadSlot: 'slot1' })).toBe(16)
++  })
++
++  it('has nothing loaded with the toolhead empty', () => {
++    expect(loadedSlot({ hub: 0, lastLoadSlot: 'slot1' })).toBeNull()
++    expect(loadedSlot({ hub: 1 })).toBeNull()
++  })
++})
+diff --git a/src/util/__tests__/qidi-box.spec.ts b/src/util/__tests__/qidi-box.spec.ts
+new file mode 100644
+index 0000000..4b4c533
+--- /dev/null
++++ b/src/util/__tests__/qidi-box.spec.ts
+@@ -0,0 +1,212 @@
++import {
++  matchQidiBoxSlots,
++  parseQidiFilamentDatabase,
++  parseQidiFilamentList,
++  qidiBoxFileTools,
++  qidiBoxReloadGroups,
++  qidiBoxSlots,
++  qidiBoxToolButtons
++} from '../qidi-box'
++
++const filamentList = parseQidiFilamentList([
++  '[fila18]',
++  'filament                       = ASA',
++  'box_max_temp                   = 45',
++  'type                           = ASA',
++  '',
++  '[colordict]',
++  '2                              = #060606',
++  '',
++  '[vendor_list]',
++  '0                              = Generic'
++].join('\n'))
++
++const filamentInfo = (index: number, type: string, color: string) => ({
++  index,
++  filament_id: 'QFA90',
++  filament_str: type,
++  filament_type: type,
++  vendor_str: 'Generic',
++  color_rgb_str: [color],
++  box_max_temp: 0
++})
++
++describe('qidiBoxSlots', () => {
++  it('reads firmware 01.01.07.01 resolved slot filaments', () => {
++    const slots = qidiBoxSlots({
++      save_variables: { variables: { box_count: 1 } },
++      box_extras: {
++        boxes: [{
++          filament_info: [
++            filamentInfo(0, 'PLA', '#228332'),
++            filamentInfo(1, 'PLA', 'ff362d'),
++            filamentInfo(2, 'PETG', '#FFFFFF'),
++            filamentInfo(3, 'PLA', '#000000')
++          ]
++        }]
++      },
++      'box_stepper slot0': { runout_button: 0 },
++      'box_stepper slot1': { runout_button: 0 },
++      'box_stepper slot2': { runout_button: 0 },
++      'box_stepper slot3': { runout_button: 1 }
++    }, null)
++
++    expect(slots.map(slot => [slot.label, slot.present, slot.type, slot.color])).toStrictEqual([
++      ['1A', true, 'PLA', '#228332'],
++      ['1B', true, 'PLA', '#FF362D'],
++      ['1C', true, 'PETG', '#FFFFFF'],
++      ['1D', false, 'PLA', '#000000'],
++      ['Ext', true, null, null]
++    ])
++  })
++
++  it('resolves numeric IDs from earlier firmware through the filament list', () => {
++    const [slot] = qidiBoxSlots({
++      save_variables: { variables: { box_count: 1, filament_slot0: 18, color_slot0: 2, vendor_slot0: 0 } },
++      'box_stepper slot0': { runout_button: 0 }
++    }, filamentList)
++
++    expect(slot).toMatchObject({ present: true, name: 'ASA', type: 'ASA', vendor: 'Generic', color: '#060606', boxMaxTemp: 45 })
++  })
++})
++
++describe('matchQidiBoxSlots', () => {
++  const slots = qidiBoxSlots({
++    save_variables: { variables: { box_count: 1 } },
++    box_extras: {
++      boxes: [{
++        filament_info: [
++          filamentInfo(0, 'PLA', '#228332'),
++          filamentInfo(1, 'PLA', '#FF362D'),
++          filamentInfo(2, 'PETG', '#FFFFFF'),
++          filamentInfo(3, 'PLA', '#000000')
++        ]
++      }]
++    },
++    'box_stepper slot0': { runout_button: 0 },
++    'box_stepper slot1': { runout_button: 0 },
++    'box_stepper slot2': { runout_button: 0 },
++    'box_stepper slot3': { runout_button: 1 }
++  }, null)
++
++  it('gives each tool the nearest-colored unused loaded slot of its type', () => {
++    expect(matchQidiBoxSlots([
++      { tool: 0, type: 'PLA', color: '#FF0000' },
++      { tool: 1, type: 'pla', color: '#FF0000' },
++      { tool: 2, type: 'PETG', color: '#000000' }
++    ], slots)).toStrictEqual({ 0: 1, 1: 0, 2: 2 })
++  })
++
++  it('leaves a tool unassigned when no unused slot of its type is loaded', () => {
++    expect(matchQidiBoxSlots([
++      { tool: 0, type: 'PETG', color: '#FFFFFF' },
++      { tool: 1, type: 'PETG', color: '#FFFFFF' },
++      { tool: 2, type: 'ABS', color: '#FFFFFF' }
++    ], slots)).toStrictEqual({ 0: 2, 1: null, 2: null })
++  })
++})
++
++describe('qidiBoxFileTools', () => {
++  const project = {
++    preset_colours: ['#111111', '#222222', '#333333'],
++    filament_type: ['PLA', 'PETG', 'PLA']
++  }
++
++  it('lists the tools the file names once each, with their filament', () => {
++    expect(qidiBoxFileTools({ ...project, used_extruders: [2, 0, 2] })).toStrictEqual({
++      tools: [
++        { tool: 2, type: 'PLA', color: '#333333' },
++        { tool: 0, type: 'PLA', color: '#111111' }
++      ],
++      named: true
++    })
++  })
++
++  it('lists every project filament when the file names no tools', () => {
++    expect(qidiBoxFileTools({ ...project, used_extruders: [] })).toStrictEqual({
++      tools: [
++        { tool: 0, type: 'PLA', color: '#111111' },
++        { tool: 1, type: 'PETG', color: '#222222' },
++        { tool: 2, type: 'PLA', color: '#333333' }
++      ],
++      named: false
++    })
++  })
++
++  it('lists T0 for a file with no filament information', () => {
++    expect(qidiBoxFileTools({})).toStrictEqual({
++      tools: [{ tool: 0, type: '', color: '' }],
++      named: false
++    })
++  })
++})
++
++describe('qidiBoxReloadGroups', () => {
++  it('groups loaded slots with the same filament, vendor, and color', () => {
++    const slots = qidiBoxSlots({
++      save_variables: { variables: { box_count: 1 } },
++      box_extras: {
++        boxes: [{
++          filament_info: [
++            filamentInfo(0, 'PLA', '#228332'),
++            filamentInfo(1, 'PLA', '#FF362D'),
++            filamentInfo(2, 'PLA', '#228332'),
++            filamentInfo(3, 'PLA', '#228332')
++          ]
++        }]
++      },
++      'box_stepper slot0': { runout_button: 0 },
++      'box_stepper slot1': { runout_button: 0 },
++      'box_stepper slot2': { runout_button: 0 },
++      'box_stepper slot3': { runout_button: 1 }
++    }, null)
++
++    expect(qidiBoxReloadGroups(slots)).toStrictEqual({
++      0: { letter: 'A', color: '#228332', members: [0, 2] },
++      2: { letter: 'A', color: '#228332', members: [0, 2] }
++    })
++  })
++})
++
++describe('parseQidiFilamentDatabase', () => {
++  it('lists firmware filaments with QF IDs', () => {
++    expect(parseQidiFilamentDatabase({
++      'QIDI PLA Basic': { type: 'PLA', filament_id: 'QFA00', filament_vendor: 'QIDI' },
++      'Bambu PETG': { type: 'PETG', filament_id: 'QFL31', filament_vendor: 'Bambu' },
++      Broken: { type: 'PLA', filament_id: 7 }
++    })).toStrictEqual([
++      { id: 'QFA00', name: 'QIDI PLA Basic', type: 'PLA', vendor: 'QIDI' },
++      { id: 'QFL31', name: 'Bambu PETG', type: 'PETG', vendor: 'Bambu' }
++    ])
++  })
++})
++
++describe('qidiBoxToolButtons', () => {
++  const slots = qidiBoxSlots({
++    save_variables: { variables: { box_count: 1 } },
++    'box_stepper slot0': { runout_button: 0 },
++    'box_stepper slot1': { runout_button: 0 },
++    'box_stepper slot2': { runout_button: 0 },
++    'box_stepper slot3': { runout_button: 1 }
++  }, null)
++
++  it('lists only tools mapped to a connected Box slot', () => {
++    // One Box: T4 maps to the external spool, T5 past the Box, and T6 shares 1B.
++    const buttons = qidiBoxToolButtons({ 0: 0, 1: 1, 2: 2, 3: 3, 4: 16, 5: 6, 6: 1 }, slots, null, null)
++
++    expect(buttons.map(button => [button.tool, button.slot.label])).toStrictEqual([
++      [0, '1A'], [1, '1B'], [2, '1C'], [3, '1D'], [6, '1B']
++    ])
++  })
++
++  it('marks the selected tool feeding the extruder active', () => {
++    const active = (current: number | null) => qidiBoxToolButtons({ 0: 0, 1: 1, 6: 1 }, slots, 1, current)
++      .filter(button => button.active)
++      .map(button => button.tool)
++
++    expect(active(6)).toStrictEqual([6])
++    // A selected tool mapped elsewhere leaves every tool on the loaded slot active.
++    expect(active(0)).toStrictEqual([1, 6])
++    expect(qidiBoxToolButtons({ 0: 0, 1: 1 }, slots, null, 1).some(button => button.active)).toBe(false)
++  })
++})
+diff --git a/src/util/qidi-box-flow.ts b/src/util/qidi-box-flow.ts
+new file mode 100644
+index 0000000..a2cb40a
+--- /dev/null
++++ b/src/util/qidi-box-flow.ts
+@@ -0,0 +1,109 @@
++import { QIDI_BOX_EXTERNAL_SLOT } from './qidi-box'
++
++// The QIDI Box flow diagram: Box units above (and, when they don't fit in one row, below) the filament path
++// hub → toolhead sensor → extruder → nozzle. Connectors run between named ports: `inlet:<slot>` on each Box slot's
++// inlet sensor, `ext` where the external spool leaves its frame, and `hub`, `th`, `ex`, `noz` along the path.
++
++export type QidiBoxFlowDirection = 'h' | 'v'
++
++export interface QidiBoxFlowConnection {
++  key: string;
++  via: string[];
++  // Curves leave and enter each port horizontally ('h') or vertically ('v').
++  dir: QidiBoxFlowDirection;
++  // The slot whose filament the strand carries; null for the path guide.
++  slot: number | null;
++}
++
++export interface QidiBoxFlowLayout {
++  spoolSize: number;
++  // The loaded-filament summary sits above the diagram rather than beside the path.
++  narrow: boolean;
++  // Too narrow for the diagram: the path sits on top and the units wrap below it, without slot strands.
++  compact: boolean;
++  // Units above the path, then below it (mirrored to face it); Box numbers, with 0 for the external spool.
++  top: number[];
++  bottom: number[];
++}
++
++export const QIDI_BOX_FLOW_NARROW_WIDTH = 520
++export const QIDI_BOX_FLOW_UNIT_GAP = 10
++export const QIDI_BOX_FLOW_EXTERNAL_MIN_WIDTH = 80
++
++const PATH = ['hub', 'th', 'ex', 'noz']
++
++// A spool column is the spool plus its hover padding; a unit is its columns plus padding.
++export const qidiBoxFlowColumnWidth = (spoolSize: number): number => spoolSize + 6
++
++export const qidiBoxFlowUnitWidth = (box: number, spoolSize: number): number => box === 0
++  ? Math.max(qidiBoxFlowColumnWidth(spoolSize) + 16, QIDI_BOX_FLOW_EXTERNAL_MIN_WIDTH)
++  : 4 * qidiBoxFlowColumnWidth(spoolSize) + 3 * 4 + 16
++
++// One row when every unit fits; otherwise the first half of the Boxes above the path and the rest, with the
++// external spool, below it. When neither fits, the compact layout.
++export const qidiBoxFlowLayout = (width: number, boxCount: number): QidiBoxFlowLayout => {
++  const narrow = width <= QIDI_BOX_FLOW_NARROW_WIDTH
++  const spoolSize = narrow ? (boxCount >= 3 ? 32 : 44) : (boxCount >= 2 ? 44 : 52)
++  const units = [...Array.from({ length: boxCount }, (_, i) => i + 1), 0]
++  const fits = (row: number[]) => row.reduce((sum, box) => sum + qidiBoxFlowUnitWidth(box, spoolSize), 0) +
++    (row.length - 1) * QIDI_BOX_FLOW_UNIT_GAP <= width
++
++  if (fits(units)) return { spoolSize, narrow, compact: false, top: units, bottom: [] }
++
++  const half = Math.ceil(boxCount / 2)
++  const top = units.slice(0, half)
++  const bottom = units.slice(half)
++
++  if (fits(top) && fits(bottom)) return { spoolSize, narrow, compact: false, top, bottom }
++
++  return { spoolSize: 44, narrow: true, compact: true, top: units, bottom: [] }
++}
++
++// The path guide, plus a strand for each filament the sensors see: the hub's from its slot inlet, and the
++// toolhead's along the path to the nozzle. The external spool skips the hub. The compact layout draws only the path.
++export const qidiBoxFlowConnections = (hubSlot: number | null, toolheadSlot: number | null, compact: boolean): QidiBoxFlowConnection[] => {
++  const connections: QidiBoxFlowConnection[] = [{ key: 'guide', via: PATH, dir: 'h', slot: null }]
++
++  if (hubSlot != null && hubSlot !== QIDI_BOX_EXTERNAL_SLOT && !compact) {
++    connections.push({ key: 'hub', via: [`inlet:${hubSlot}`, 'hub'], dir: 'v', slot: hubSlot })
++  }
++
++  if (toolheadSlot === QIDI_BOX_EXTERNAL_SLOT) {
++    if (!compact) connections.push({ key: 'external', via: ['ext', 'th'], dir: 'v', slot: toolheadSlot })
++
++    connections.push({ key: 'toolhead', via: ['th', 'ex', 'noz'], dir: 'h', slot: toolheadSlot })
++  } else if (toolheadSlot != null) {
++    connections.push({ key: 'toolhead', via: PATH, dir: 'h', slot: toolheadSlot })
++  }
++
++  return connections
++}
++
++const round = (value: number) => Math.round(value * 10) / 10
++
++// SVG path data through the points, each step a cubic curve that leaves and enters along the direction, or a
++// straight line when the points already line up.
++export const qidiBoxFlowPath = (points: [number, number][], dir: QidiBoxFlowDirection): string => {
++  if (points.length < 2) return ''
++
++  let d = `M${round(points[0][0])} ${round(points[0][1])}`
++
++  for (let i = 1; i < points.length; i++) {
++    const [x1, y1] = points[i - 1].map(round)
++    const [x2, y2] = points[i].map(round)
++
++    if (dir === 'h' && Math.abs(y2 - y1) > 0.5) {
++      const mid = round((x1 + x2) / 2)
++
++      d += ` C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}`
++    } else if (dir === 'v' && Math.abs(x2 - x1) > 0.5) {
++      const mid = round((y1 + y2) / 2)
++
++      d += ` C${x1} ${mid} ${x2} ${mid} ${x2} ${y2}`
++    } else {
++      d += ` L${x2} ${y2}`
++    }
++  }
++
++  return d
++}
+diff --git a/src/util/qidi-box-task.ts b/src/util/qidi-box-task.ts
+new file mode 100644
+index 0000000..5691adb
+--- /dev/null
++++ b/src/util/qidi-box-task.ts
+@@ -0,0 +1,241 @@
++import { QIDI_BOX_EXTERNAL_SLOT, qidiBoxSlotLabel, qidiBoxSlotNumber, type QidiBoxSlot } from './qidi-box'
++
++// QIDI's Box flows (multi_color_controller.task) run a queue of steps. A failed step leaves the task paused on it
++// until FLOW_RETRY reruns it or FLOW_STOP ends the flow.
++
++export interface QidiBoxTask {
++  step: string | null;
++  paused: boolean;
++}
++
++// What a step is doing, as an app.qidi_box.step key and its parameters.
++export interface QidiBoxStepText {
++  key: string;
++  params: Record<string, string | number>;
++}
++
++// The text for a step the card doesn't know.
++export const QIDI_BOX_STEP_UNKNOWN = 'working'
++
++// code is null for an error without a QIDI code.
++export interface QidiBoxError {
++  code: string | null;
++  message: string;
++}
++
++// The slot whose filament a step moves: BOX_ steps act on a Box slot, EXT_ steps on the external spool.
++// BOX_CUT and BOX_WIPE act on whatever is at the toolhead, so their text names no slot.
++const STEPS: Record<string, { action: string, slot: 'active' | 'unloading' | 'external' | null }> = {
++  BOX_HEAT: { action: 'heat', slot: 'active' },
++  BOX_CUT: { action: 'cut', slot: null },
++  BOX_UNLOAD: { action: 'unload', slot: 'unloading' },
++  BOX_LOAD: { action: 'load', slot: 'active' },
++  BOX_WIPE: { action: 'wipe', slot: null },
++  BOX_EJECT: { action: 'eject', slot: 'active' },
++  EXT_HEAT: { action: 'heat', slot: 'external' },
++  EXT_CUT: { action: 'cut', slot: null },
++  EXT_UNLOAD: { action: 'unload', slot: 'external' },
++  EXT_BITE: { action: 'bite', slot: null },
++  EXT_LOAD: { action: 'load', slot: 'external' },
++  EXT_WIPE: { action: 'wipe', slot: null }
++}
++
++// Steps whose text can name their slot, and the heat step, which can also give the nozzle target.
++const SLOT_ACTIONS = ['heat', 'unload', 'load', 'eject']
++
++const boxSlot = (value: unknown): number | null => {
++  const slot = qidiBoxSlotNumber(value)
++
++  return slot != null && slot !== QIDI_BOX_EXTERNAL_SLOT ? slot : null
++}
++
++// A finished flow resets current_queue and current_step but never publishes flow_id going back to null, so judge
++// activity from the fields that do reset.
++export const qidiBoxTask = (printer: Record<string, any>): QidiBoxTask | null => {
++  const task = printer.multi_color_controller?.task
++
++  if (!(task?.current_queue?.length || task?.current_step || task?.is_paused)) return null
++
++  return {
++    step: typeof task.current_step === 'string' && task.current_step !== '' ? task.current_step : null,
++    paused: task.is_paused === true
++  }
++}
++
++// operation.active_slot is the flow's target slot. A load with another slot's filament at the hub first unloads
++// that slot, last_load_slot.
++export const qidiBoxStepSlot = (printer: Record<string, any>, step: string | null): number | null => {
++  const kind = step != null ? STEPS[step]?.slot : null
++  const controller = printer.multi_color_controller
++
++  switch (kind) {
++    case 'external':
++      return QIDI_BOX_EXTERNAL_SLOT
++    case 'unloading':
++      return boxSlot(controller?.box?.last_load_slot ?? printer.save_variables?.variables?.last_load_slot) ??
++        boxSlot(controller?.operation?.active_slot)
++    case 'active':
++      return boxSlot(controller?.operation?.active_slot)
++    default:
++      return null
++  }
++}
++
++export const qidiBoxStepText = (step: string | null, slot: string | null, temp: number | null): QidiBoxStepText => {
++  const action = step != null ? STEPS[step]?.action : null
++
++  if (action == null) return { key: QIDI_BOX_STEP_UNKNOWN, params: {} }
++  if (!SLOT_ACTIONS.includes(action)) return { key: action, params: {} }
++
++  const params: Record<string, string | number> = {}
++  let key = action
++
++  if (action === 'heat' && temp != null) {
++    key += '_temp'
++    params.temp = temp
++  }
++
++  if (step?.startsWith('EXT_')) {
++    key += '_external'
++  } else if (slot != null) {
++    key += '_slot'
++    params.slot = slot
++  }
++
++  return { key, params }
++}
++
++// The running or failed step's text, naming its slot and, while heating, the nozzle target.
++export const qidiBoxTaskText = (printer: Record<string, any>): QidiBoxStepText | null => {
++  const task = qidiBoxTask(printer)
++
++  if (task == null) return null
++
++  const slot = qidiBoxStepSlot(printer, task.step)
++  const label = slot != null ? qidiBoxSlotLabel(slot) : null
++  const target = Number(printer.extruder?.target)
++  const text = qidiBoxStepText(task.step, label, Number.isFinite(target) && target > 0 ? Math.round(target) : null)
++
++  // QIDI's wipe step purges at the chute before it wipes. Valve Oil reports when the first chute wipe starts;
++  // without that report the step stays "wipe".
++  if (text.key === 'wipe' && !task.paused && printer.tltg_box_flow_recovery?.wiping === false) return { key: 'purge', params: {} }
++
++  return text
++}
++
++const ERROR = /Code:\s*(QDE_\d+_\d+)\s*;\s*Message:(.*)$/
++const FAILED_STEP = /\bStep \S+ failed\. Pausing flow\b/
++
++const parseError = (line: string): QidiBoxError | null => {
++  const match = ERROR.exec(line.replace(/<br \/>/g, ' ').trim())
++
++  return match ? { code: match[1], message: match[2].trim() } : null
++}
++
++// A step that raises an error instead of failing is paused by Qidi-Max-4-Optimized with QIDI's
++// `Step BOX_LOAD failed. Pausing flow.`, and Klipper then reports the error, such as
++// `!! Error during homing e_endstop: Communication timeout during homing`.
++const parseRaised = (line: string | undefined): QidiBoxError | null => {
++  if (line == null || !line.startsWith('!!')) return null
++
++  const message = line.replace(/^!!\s*/, '').replace(/<br \/>/g, ' ').trim()
++
++  return message && !ERROR.test(message) ? { code: null, message } : null
++}
++
++// QIDI reports a Box error as `!! Code:QDE_004_006; Message:Extruder loading failure.`, then the flow's
++// `Step BOX_LOAD failed. Pausing flow.` The current failure's error is the latest one since the flow before it
++// failed, so an earlier failure's error is not shown for a step that failed without one. Without a QIDI error,
++// the error Klipper reported right after the failure is used.
++export const qidiBoxLastError = (messages: readonly string[]): QidiBoxError | null => {
++  let failures = 0
++  let raised: QidiBoxError | null = null
++
++  for (let i = messages.length - 1; i >= 0; i--) {
++    const line = messages[i].replace(/^(?:!!|\/\/)\s*/, '')
++
++    if (FAILED_STEP.test(line)) {
++      if (++failures > 1) return raised
++
++      raised = parseRaised(messages[i + 1])
++    }
++
++    const error = parseError(line)
++
++    if (error) return error
++  }
++
++  return raised
++}
++
++// multi_color_controller.box_warning_info lists QIDI's Box heater and sensor warnings.
++export const qidiBoxWarnings = (value: unknown): string[] => {
++  if (!Array.isArray(value)) return []
++
++  const warnings = value.flatMap(warning => {
++    if (warning == null || warning === '') return []
++    if (typeof warning === 'string') {
++      const error = parseError(warning)
++
++      return [error ? `${error.message} (${error.code})` : warning]
++    }
++    if (typeof warning === 'object') {
++      const { message, msg, code } = warning
++      const text = message ?? msg
++
++      if (text != null) return [code != null ? `${text} (${code})` : String(text)]
++    }
++
++    return [JSON.stringify(warning)]
++  })
++
++  return [...new Set(warnings)]
++}
++
++export const qidiBoxHubSensor = (printer: Record<string, any>): number | null => {
++  return printer.box_extras?.b_endstop_state ?? printer.multi_color_controller?.box?.b_endstop_state ?? null
++}
++
++// Filament stopped between the hub and the toolhead, outside a print: the hub sensor sees it and the toolhead
++// sensor doesn't. Qidi-Max-4-Optimized's Unload and Eject then pull back the slot at the hub, even while a failed
++// flow is paused.
++export const qidiBoxStranded = (printer: Record<string, any>): boolean => {
++  return printer['filament_switch_sensor filament_switch_sensor']?.filament_detected === false &&
++    qidiBoxHubSensor(printer) === 0 &&
++    !['printing', 'paused'].includes(printer.print_stats?.state)
++}
++
++// Stranded filament can be unloaded or ejected while no flow runs or a failed flow is paused, unless the Box's
++// button is busy.
++export const qidiBoxStrandedRecovery = (printer: Record<string, any>): boolean => {
++  const task = qidiBoxTask(printer)
++
++  return !printer.box_extras?.box_button_state && (task == null || task.paused) && qidiBoxStranded(printer)
++}
++
++// The slot whose filament is at the hub, picked like Qidi-Max-4-Optimized's Unload and Eject: the slot it recorded
++// at the hub or the last-loaded slot, each only while its inlet has filament, then the only slot with filament at
++// its inlet. Two different named slots can't be told apart.
++export const qidiBoxHubSlot = (printer: Record<string, any>, slots: Pick<QidiBoxSlot, 'index' | 'present'>[]): number | null => {
++  const variables = printer.save_variables?.variables ?? {}
++  const present = slots.filter(slot => slot.index !== QIDI_BOX_EXTERNAL_SLOT && slot.present).map(slot => slot.index)
++  const named = [...new Set([boxSlot(variables.vo_box_hub_slot), boxSlot(variables.last_load_slot)])]
++    .filter((slot): slot is number => slot != null && present.includes(slot))
++
++  if (named.length) return named.length === 1 ? named[0] : null
++
++  return present.length === 1 ? present[0] : null
++}
++
++// The slot feeding the extruder. QIDI's slot_sync names the Box slot synced to the extruder, but QIDI leaves it at
++// 'slot-1' while a Box slot is printing or unloading. With no slot synced and filament at the toolhead, filament at
++// the hub is the Box slot's, picked as for the hub; otherwise it's the external spool's, which doesn't pass the hub.
++export const qidiBoxLoadedSlot = (printer: Record<string, any>, slots: Pick<QidiBoxSlot, 'index' | 'present'>[]): number | null => {
++  const sync = printer.save_variables?.variables?.slot_sync
++  const slot = qidiBoxSlotNumber(sync)
++
++  if (slot != null) return slot
++  if (sync !== 'slot-1' || printer['filament_switch_sensor filament_switch_sensor']?.filament_detected !== true) return null
++
++  return qidiBoxHubSensor(printer) === 0 ? qidiBoxHubSlot(printer, slots) : QIDI_BOX_EXTERNAL_SLOT
++}
+diff --git a/src/util/qidi-box.ts b/src/util/qidi-box.ts
+new file mode 100644
+index 0000000..ccceb36
+--- /dev/null
++++ b/src/util/qidi-box.ts
+@@ -0,0 +1,331 @@
++// QIDI Box slots: Box 1 holds slots 0-3 (1A-1D), Box 2 slots 4-7 (2A-2D), and so on; slot 16 is the external spool.
++
++export const QIDI_BOX_EXTERNAL_SLOT = 16
++
++export interface QidiBoxSlot {
++  index: number;
++  label: string;
++  present: boolean;
++  filamentId: string | null;
++  name: string | null;
++  type: string | null;
++  vendor: string | null;
++  color: string | null;
++  minTemp: number | null;
++  maxTemp: number | null;
++  boxMaxTemp: number | null;
++  reading: boolean;
++}
++
++// QIDI's officiall_filas_list.cfg: [filaN] filament entries, [colordict] and [vendor_list] ID maps.
++export type QidiFilamentList = Record<string, Record<string, string>>
++
++// An entry of the firmware filament database (01.01.07.01 filament-0.4.json), keyed by its QF filament ID.
++export interface QidiFilament {
++  id: string;
++  name: string;
++  type: string;
++  vendor: string;
++}
++
++// Loaded Box slots that reload into each other, lettered in slot order.
++export interface QidiBoxReloadGroup {
++  letter: string;
++  color: string | null;
++  members: number[];
++}
++
++export type QidiBoxReloadGroups = Record<number, QidiBoxReloadGroup>
++
++// A Box's aht20_f humidity and temperature, and its heater_generic target while drying.
++export interface QidiBoxClimate {
++  humidity: number | null;
++  temperature: number | null;
++  target: number | null;
++}
++
++export interface QidiBoxTool {
++  tool: number;
++  type: string;
++  color: string;
++}
++
++export interface QidiBoxFileTools {
++  tools: QidiBoxTool[];
++  named: boolean;
++}
++
++// File metadata naming the tools a print uses, from QIDI's Moonraker (used_extruders, preset_colours) or upstream.
++export interface QidiBoxFileMetadata {
++  used_extruders?: number[];
++  referenced_tools?: number[];
++  preset_colours?: string[];
++  filament_colors?: string[];
++  extruder_colors?: string[];
++  filament_type?: string[];
++}
++
++// The tools a file prints with. A file whose metadata names none can select any filament of its slicer project,
++// so all of them are listed, or T0 when the project lists none.
++export const qidiBoxFileTools = (file: QidiBoxFileMetadata): QidiBoxFileTools => {
++  const colors = file.preset_colours ?? file.filament_colors ?? file.extruder_colors ?? []
++  const types = file.filament_type ?? []
++  const listed = [...new Set(file.used_extruders ?? file.referenced_tools ?? [])]
++  const named = listed.length > 0
++  const tools = named ? listed : [...Array(Math.max(colors.length, types.length, 1)).keys()]
++
++  return {
++    tools: tools.map(tool => ({
++      tool,
++      type: types[tool] ?? '',
++      color: colors[tool] ?? ''
++    })),
++    named
++  }
++}
++
++export const qidiBoxSlotLabel = (index: number): string => index === QIDI_BOX_EXTERNAL_SLOT
++  ? 'Ext'
++  : `${Math.floor(index / 4) + 1}${String.fromCharCode(65 + (index % 4))}`
++
++// Saved slot references such as value_tN and slot_sync read 'slotN'.
++export const qidiBoxSlotNumber = (value: unknown): number | null => {
++  const match = /^slot(\d+)$/.exec(String(value ?? ''))
++
++  return match ? parseInt(match[1], 10) : null
++}
++
++export const parseQidiFilamentList = (text: string): QidiFilamentList => {
++  const list: QidiFilamentList = {}
++  let section: Record<string, string> | undefined
++
++  for (const raw of text.split(/\r?\n/)) {
++    const line = raw.trim()
++
++    if (!line || line.startsWith('#')) continue
++
++    const header = /^\[(.+)\]$/.exec(line)
++
++    if (header) {
++      section = list[header[1].trim()] = {}
++    } else if (section) {
++      const separator = line.indexOf('=')
++
++      if (separator > 0) {
++        section[line.slice(0, separator).trim()] = line.slice(separator + 1).trim().replace(/['"]/g, '')
++      }
++    }
++  }
++
++  return list
++}
++
++export const parseQidiFilamentDatabase = (data: unknown): QidiFilament[] => {
++  if (data == null || typeof data !== 'object') return []
++
++  return Object.entries(data as Record<string, Record<string, unknown>>)
++    .filter(([, entry]) => typeof entry?.filament_id === 'string' && /^[A-Z]+\d+$/.test(entry.filament_id))
++    .map(([name, entry]) => ({
++      id: String(entry.filament_id),
++      name,
++      type: String(entry.type ?? ''),
++      vendor: String(entry.filament_vendor ?? '')
++    }))
++}
++
++export const normalizeQidiColor = (value: unknown): string | null => {
++  const color = Array.isArray(value) ? value[0] : value
++  const match = typeof color === 'string' ? /^#?([0-9a-f]{6})$/i.exec(color.trim()) : null
++
++  return match ? `#${match[1].toUpperCase()}` : null
++}
++
++// Black or white, whichever reads better on the color.
++export const qidiTextColor = (color: string | null): string => {
++  const hex = normalizeQidiColor(color)
++
++  if (hex == null) return 'inherit'
++
++  const [r, g, b] = [1, 3, 5].map(offset => parseInt(hex.substring(offset, offset + 2), 16))
++
++  return (r * 299 + g * 587 + b * 114) / 1000 > 125 ? '#000000' : '#FFFFFF'
++}
++
++// A filament close to the card background, black on the dark theme or white on the light one, needs an outline to
++// stay visible.
++export const qidiColorNearBackground = (color: string | null, dark: boolean): boolean => {
++  const hex = normalizeQidiColor(color)
++
++  if (hex == null) return false
++
++  const [r, g, b] = [1, 3, 5].map(offset => parseInt(hex.substring(offset, offset + 2), 16))
++  const luma = (r * 299 + g * 587 + b * 114) / 255000
++
++  return dark ? luma < 0.25 : luma > 0.85
++}
++
++const toNumber = (value: unknown): number | null => {
++  const number = typeof value === 'number' ? value : parseFloat(String(value))
++
++  return Number.isFinite(number) ? number : null
++}
++
++const toText = (value: unknown): string | null => typeof value === 'string' && value.trim() !== '' ? value.trim() : null
++
++// Firmware 01.01.07.01 publishes every slot's resolved filament as box_extras.boxes[].filament_info[];
++// these arrays arrive whole in status updates.
++const resolvedFilament = (printer: Record<string, any>, index: number) => {
++  if (index === QIDI_BOX_EXTERNAL_SLOT) {
++    return printer.multi_color_controller?.extra?.filament_info
++  }
++
++  const infos = printer.box_extras?.boxes?.[Math.floor(index / 4)]?.filament_info
++
++  if (Array.isArray(infos)) {
++    return infos.find(info => info?.index === index % 4) ?? infos[index % 4]
++  }
++}
++
++// Earlier firmware saves numeric IDs that resolve through officiall_filas_list.cfg.
++const legacyFilament = (variables: Record<string, any>, list: QidiFilamentList | null, index: number) => {
++  const filamentId = variables[`filament_slot${index}`]
++  const filament = list?.[`fila${filamentId}`]
++  const colorId = variables[`color_slot${index}`]
++
++  return {
++    filament_id: filamentId != null ? String(filamentId) : null,
++    filament_str: filament?.filament,
++    filament_type: filament?.type,
++    vendor_str: list?.vendor_list?.[variables[`vendor_slot${index}`]],
++    color_rgb_str: typeof colorId === 'number' || /^\d+$/.test(String(colorId))
++      ? list?.colordict?.[colorId]
++      : colorId,
++    min_temp: filament?.min_temp,
++    max_temp: filament?.max_temp,
++    box_max_temp: filament?.box_max_temp
++  }
++}
++
++export const qidiBoxSlots = (printer: Record<string, any>, list: QidiFilamentList | null): QidiBoxSlot[] => {
++  const variables: Record<string, any> = printer.save_variables?.variables ?? {}
++  const boxCount = Math.max(0, Math.min(4, toNumber(variables.box_count) ?? 0))
++  const indexes = [...Array.from({ length: boxCount * 4 }, (_, index) => index), QIDI_BOX_EXTERNAL_SLOT]
++
++  return indexes.map(index => {
++    const info = resolvedFilament(printer, index) ?? legacyFilament(variables, list, index)
++    const stepper = printer[`box_stepper slot${index}`]
++
++    return {
++      index,
++      label: qidiBoxSlotLabel(index),
++      // A Box slot's runout_button reads 0 while filament is at its inlet.
++      present: index === QIDI_BOX_EXTERNAL_SLOT || stepper?.runout_button === 0,
++      filamentId: info?.filament_id != null ? String(info.filament_id) : null,
++      name: toText(info?.filament_str),
++      type: toText(info?.filament_type),
++      vendor: toText(info?.vendor_str),
++      color: normalizeQidiColor(info?.color_rgb_str),
++      minTemp: toNumber(info?.min_temp),
++      maxTemp: toNumber(info?.max_temp),
++      boxMaxTemp: toNumber(info?.box_max_temp),
++      reading: stepper?.rfid_state === 1
++    }
++  })
++}
++
++// Loaded Box slots with the same color, filament, and vendor reload into each other when one runs out.
++// Groups are lettered in slot order.
++export const qidiBoxReloadGroups = (slots: QidiBoxSlot[]): QidiBoxReloadGroups => {
++  const byKey = new Map<string, number[]>()
++
++  for (const slot of slots) {
++    if (slot.index === QIDI_BOX_EXTERNAL_SLOT || !slot.present) continue
++
++    const key = `${slot.color}-${slot.name}-${slot.vendor}`
++
++    byKey.set(key, [...(byKey.get(key) ?? []), slot.index])
++  }
++
++  const groups: QidiBoxReloadGroups = {}
++
++  Array.from(byKey.values())
++    .filter(members => members.length > 1)
++    .forEach((members, i) => {
++      const group = {
++        letter: String.fromCharCode(65 + i),
++        color: slots.find(slot => slot.index === members[0])?.color ?? null,
++        members
++      }
++
++      members.forEach(member => { groups[member] = group })
++    })
++
++  return groups
++}
++
++const sameType = (a: string | null, b: string) => a != null && a.toUpperCase() === b.trim().toUpperCase()
++
++const colorDistance = (a: string | null, b: string | null): number => {
++  const ca = normalizeQidiColor(a)
++  const cb = normalizeQidiColor(b)
++
++  if (ca == null || cb == null) return Number.MAX_SAFE_INTEGER
++
++  return [1, 3, 5].reduce((sum, offset) => {
++    const delta = parseInt(ca.substring(offset, offset + 2), 16) - parseInt(cb.substring(offset, offset + 2), 16)
++
++    return sum + delta * delta
++  }, 0)
++}
++
++// Loaded Box slots a tool can print from: those holding the same filament type.
++export const qidiBoxSlotsForTool = (tool: QidiBoxTool, slots: QidiBoxSlot[]): QidiBoxSlot[] => slots
++  .filter(slot => slot.index !== QIDI_BOX_EXTERNAL_SLOT && slot.present && sameType(slot.type, tool.type))
++
++// Matches each tool, in order, to the nearest-colored unused slot of its type, as QIDI's Fluidd did.
++// A tool left without an unused slot stays unassigned; it can still share a slot when chosen by hand.
++export const matchQidiBoxSlots = (tools: QidiBoxTool[], slots: QidiBoxSlot[]): Record<number, number | null> => {
++  const used = new Set<number>()
++  const result: Record<number, number | null> = {}
++
++  for (const tool of tools) {
++    const slot = qidiBoxSlotsForTool(tool, slots)
++      .filter(slot => !used.has(slot.index))
++      .sort((a, b) => colorDistance(tool.color, a.color) - colorDistance(tool.color, b.color))[0]
++
++    result[tool.tool] = slot?.index ?? null
++
++    if (slot) used.add(slot.index)
++  }
++
++  return result
++}
++
++export interface QidiBoxToolButton {
++  tool: number;
++  slot: QidiBoxSlot;
++  active: boolean;
++}
++
++// The tools T_MANAGER can load: those mapped to a connected Box slot. It pauses the printer with QDE_004_027 for a
++// tool mapped to the external spool or past the connected Boxes, and an unmapped tool defaults to the external spool.
++// Of the tools mapped to the slot feeding the extruder, extrude_state's (the last tool T_MANAGER selected) is active,
++// or all of them when it names none.
++export const qidiBoxToolButtons = (
++  toolMap: Record<number, number>,
++  slots: QidiBoxSlot[],
++  loadedSlot: number | null,
++  currentTool: number | null
++): QidiBoxToolButton[] => {
++  const buttons = Object.entries(toolMap)
++    .map(([tool, index]) => ({
++      tool: Number(tool),
++      slot: slots.find(slot => slot.index === index && slot.index !== QIDI_BOX_EXTERNAL_SLOT)
++    }))
++    .filter((button): button is { tool: number; slot: QidiBoxSlot } => button.slot != null)
++    .sort((a, b) => a.tool - b.tool)
++  const feeding = buttons.filter(button => button.slot.index === loadedSlot).map(button => button.tool)
++  const active = feeding.includes(currentTool ?? -1) ? [currentTool] : feeding
++
++  return buttons.map(button => ({ ...button, active: active.includes(button.tool) }))
++}
+diff --git a/src/views/Dashboard.vue b/src/views/Dashboard.vue
+index a01c43f..6155512 100644
+--- a/src/views/Dashboard.vue
++++ b/src/views/Dashboard.vue
+@@ -55,6 +55,7 @@ import SensorsCard from '@/components/widgets/sensors/SensorsCard.vue'
+ import RunoutSensorsCard from '@/components/widgets/runout-sensors/RunoutSensorsCard.vue'
+ import BeaconCard from '@/components/widgets/beacon/BeaconCard.vue'
+ import AfcCard from '@/components/widgets/afc/AfcCard.vue'
++import QidiBoxCard from '@/components/widgets/qidiBox/QidiBoxCard.vue'
+ import type Sortable from 'sortablejs'
+ 
+ @Component({
+@@ -77,7 +78,9 @@ import type Sortable from 'sortablejs'
+     SensorsCard,
+     RunoutSensorsCard,
+     BeaconCard,
+-    AfcCard
++    AfcCard,
++    // Registered as box-card, the ID QIDI's Fluidd gives its Box card, so a layout copied from it keeps the card's place.
++    BoxCard: QidiBoxCard
+   }
+ })
+ export default class Dashboard extends Mixins(StateMixin) {
+@@ -154,6 +157,10 @@ export default class Dashboard extends Mixins(StateMixin) {
+     return this.$typedGetters['printer/getSupportsAfc']
+   }
+ 
++  get hasQidiBox (): boolean {
++    return this.$typedGetters['qidiBox/getBoxCount'] > 0
++  }
++
+   get hasMacros (): boolean {
+     return this.$typedGetters['macros/getVisibleMacros'].length > 0
+   }
+@@ -237,6 +244,7 @@ export default class Dashboard extends Mixins(StateMixin) {
+     if (item.id === 'sensors-card' && !this.hasSensors) return true
+     if (item.id === 'temperature-card' && !this.hasHeatersOrTemperatureSensors) return true
+     if (item.id === 'afc-card' && !this.supportsAfc) return true
++    if (item.id === 'box-card' && !this.hasQidiBox) return true
+ 
+     // Otherwise return the opposite of whatever the enabled state is.
+     return !item.enabled

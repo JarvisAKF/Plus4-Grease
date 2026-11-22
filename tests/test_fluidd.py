@@ -295,6 +295,22 @@ class InstallTests(unittest.TestCase):
         self.assertFalse(os.path.exists(p.folder()))
         self.assertGreaterEqual(p.sudo.calls.count(["systemctl", "reload", "nginx"]), 2)
 
+    def test_upgrade_from_an_earlier_build_replaces_the_files_and_keeps_settings(self):
+        p = self.make()
+        p.install()
+        old_file = os.path.join(p.folder(), "from-before")
+        open(old_file, "w").close()
+        state = fluidd.load_state(p.paths)
+        state["version"] = "v1.38.1"
+        fluidd.save_state(p.paths, state)
+        posts = len(p.http.posts)
+        self.assertEqual(p.install(), 0)
+        self.assertFalse(os.path.exists(old_file))
+        self.assertFalse(os.path.exists(p.folder() + ".old"))
+        self.assertEqual(fluidd.load_state(p.paths)["version"], fluidd.BUNDLE_VERSION)
+        self.assertEqual(len(p.http.posts), posts)
+        self.assertTrue(p.lines[-1].startswith("Done."))
+
     def test_failed_upgrade_keeps_the_working_install(self):
         p = self.make()
         p.install()

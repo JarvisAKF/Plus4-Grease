@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.0
+- The new Fluidd has a QIDI Box card (Plus4 Grease build 2 of Fluidd v1.38.1). It shows each slot's filament, color and RFID state, the Box's humidity and temperature, which slot is loaded, the hub and toolhead sensors, tool mapping, auto-reload groups, and a running or failed Box step with QIDI's error. It's read-only: load, unload and drying stay on the touchscreen and QIDI's page. Ported from Valve Oil's Fluidd; see `fluidd/README.md`.
+- `install.sh fluidd install` updates an installed earlier build in place and keeps its settings; `status` says when an update is waiting.
+- The Fluidd changes live in `fluidd/plus4-grease.patch`, applied by `tools/build_fluidd.sh`.
+
 ## 0.5.0
 - Optional `fluidd install`: upstream Fluidd v1.38.1 on port 81, beside QIDI's Fluidd v1.30.4, which stays untouched on port 80. It's served by the printer's own nginx from `~/plus4-grease-fluidd` through its own site file. Every text file ships with a `.gz` copy that nginx sends as stored (`gzip_static`; on an nginx without it, the site compresses as it sends instead), hashed assets are cached by the browser for a year, and the site writes no access log. A first visit downloads about 4.4 MB.
 - The new Fluidd keeps its settings in its own Moonraker namespace, `plus4_grease_fluidd`; the first install copies QIDI Fluidd's settings in. Cameras are passed to QIDI's own site, so they work the same on both pages.

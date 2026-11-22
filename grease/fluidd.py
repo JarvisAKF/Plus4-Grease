@@ -1,7 +1,7 @@
 """Plus4 Grease Fluidd: a current Fluidd served beside QIDI's. Python 3.7.
 
-QIDI's Fluidd stays exactly as it is on port 80, Box panel and all. This adds upstream Fluidd (v1.38.1)
-on port 81, served by the nginx that's already running, from its own folder (~/plus4-grease-fluidd) and
+QIDI's Fluidd stays exactly as it is on port 80, Box panel and all. This adds upstream Fluidd (v1.38.1),
+with a read-only QIDI Box card ported from Valve Oil's Fluidd (fluidd/plus4-grease.patch), on port 81, served by the nginx that's already running, from its own folder (~/plus4-grease-fluidd) and
 its own nginx site file. Its settings live in their own Moonraker namespace (plus4_grease_fluidd); the
 first install copies QIDI Fluidd's settings in so the layout, macros and theme carry over. Removing it
 deletes the site file and the folder. Nothing of QIDI's is changed at any point.
@@ -29,9 +29,11 @@ import zipfile
 from . import system
 from .core import GreaseError
 
-BUNDLE_VERSION = "v1.38.1"
+FLUIDD_VERSION = "v1.38.1"
+BUILD = 2  # Plus4 Grease's own build number for this Fluidd version; 2 adds the read-only QIDI Box card
+BUNDLE_VERSION = "{}-{}".format(FLUIDD_VERSION, BUILD)
 BUNDLE_NAME = "plus4-grease-fluidd-{}.zip".format(BUNDLE_VERSION)
-BUNDLE_SHA256 = "6e586522ac1cc1db755a05dc117effd51f44c840621b1f92805c991a90d0bc31"
+BUNDLE_SHA256 = "1897da1133d5bb3f13093ad57ff5932dadc73910ec8b5c876ac60f6ffbf5d914"
 PORT = 81
 NAMESPACE = "plus4_grease_fluidd"
 QIDI_NAMESPACE = "fluidd"
@@ -44,7 +46,7 @@ STATE_NAME = "fluidd.json"
 
 
 def title(port=PORT):
-    return "Fluidd {} on port {} (QIDI's Fluidd stays on port 80)".format(BUNDLE_VERSION, port)
+    return "Fluidd {} with a QIDI Box card, on port {} (QIDI's Fluidd stays on port 80)".format(FLUIDD_VERSION, port)
 
 
 def folder(paths):
@@ -477,7 +479,7 @@ def report_status(paths, report, root=None):
     state = load_state(paths)
     note = ""
     if current == "applied" and state.get("version") and state.get("version") != BUNDLE_VERSION:
-        note = " (installed: {}; install again to update)".format(state["version"])
+        note = " (installed: build {}; install again to update to build {})".format(state["version"], BUNDLE_VERSION)
     elif current == "available":
         note = "\n             Off unless you ask: install.sh fluidd install adds it."
     report("  {:9}  {}{}".format(current, title(state.get("port", PORT)), note))
