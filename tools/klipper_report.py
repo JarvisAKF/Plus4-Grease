@@ -89,6 +89,8 @@ class Session(object):
         self.stat_count = 0
         self.last_t = None     # the last Stats line's eventtime
         self.events = []       # (kind, text, eventtime of the Stats line before it, Stats entries before it)
+        self.reason = None     # how this start came about (FIRMWARE_RESTART, RESTART, service start)
+        self.before = []       # the last lines Klipper logged before it
 
     def wall(self, eventtime):
         """'15:40:07' for a Stats eventtime, from the start line's clock and monotonic time."""
@@ -149,6 +151,7 @@ class Scan(object):
         self.last_print = None
         self.rollover = False
         self.place = (0, 0)
+        self.recent = collections.deque(maxlen=200)   # non-Stats lines since the last start
 
     def _new_session(self, session):
         self._close_print("Klipper restarted before the print finished")
@@ -185,13 +188,17 @@ class Scan(object):
                 match = START.match(line)
                 if match:
                     fresh = Session(match.group(1), float(match.group(2)), float(match.group(3)))
+                    fresh.reason, fresh.before = start_reason(list(self.recent))
+                    self.recent.clear()
                     if not current.stat_count and not current.events:
                         fresh.boards, fresh.config = current.boards, current.config
                         self._close_print("Klipper restarted before the print finished")
                         self.sessions[-1] = fresh
                     else:
                         self._new_session(fresh)
-            elif line.startswith("=============== Log rollover at"):
+            elif line.strip() and not line.startswith((" ", "\t")):
+                self.recent.append(line)
+            if line.startswith("=============== Log rollover at"):
                 self.rollover = True
             elif line == "===== Config file =====":
                 config_lines = []
@@ -235,6 +242,25 @@ class Scan(object):
             self._new_session(Session())
             current = self.sessions[-1]
         current.config = config
+
+
+def start_reason(lines):
+    """How a Klipper start came about, from the lines logged since the start before it, and the last few
+    lines logged before the restart itself."""
+    marks = [i for i, line in enumerate(lines)
+             if line.startswith(("Restarting printer", "Starting Klippy", "Attempting MCU"))]
+    if any(line.startswith("Attempting MCU") for line in lines):
+        reason = "FIRMWARE_RESTART (Klipper reset its boards and reloaded)"
+    elif any(line.startswith("Restarting printer") for line in lines):
+        reason = "RESTART (Klipper reloaded its config, asked by a command, Fluidd, or QIDI's software)"
+    elif any(line.startswith("Starting Klippy") for line in lines):
+        reason = "Klipper's service started (the printer powering on, or the service being restarted)"
+    else:
+        return None, []
+    cut = marks[0] if marks else len(lines)
+    skip = ("=====", "Stats ", "Args:", "Git version", "CPU:", "Python:", "Start printer", "Loaded MCU", "MCU '")
+    before = [line[:150] for line in lines[:cut] if not line.startswith(skip)][-4:]
+    return reason, before
 
 
 def scan(paths, progress=None):
@@ -606,6 +632,19 @@ def main(argv=None):
         describe(summarize((e for e in (parse_entry(r) for r in result.tail) if e), latest), latest, report)
 
     usb_events = read_usb_log(os.path.join(os.path.dirname(paths[-1]), USB_LOG))
+    started = [s for s in sessions if s.started][-5:]
+    if started:
+        report("")
+        report("Klipper starts (the last {}):".format(len(started)))
+    for session in started:
+        report("  {}: {}".format(time.strftime("%b %d %H:%M:%S %Z", time.localtime(session.epoch)),
+                                 session.reason or "how it started isn't in the log"))
+        for line in session.before:
+            report("      logged before it: " + line)
+        if usb_events:
+            for event in [e for e in usb_events if session.epoch - 30 <= e.epoch <= session.epoch and
+                          e.action != "start"]:
+                report("      USB {:.1f} s before: {}".format(session.epoch - event.epoch, usb_text(event)))
     report("")
     if usb_events is None:
         report("No USB event log yet (Plus4 Grease's install adds it), so USB disconnects can't be matched.")

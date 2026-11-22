@@ -281,6 +281,21 @@ class ReportTests(unittest.TestCase):
         self.assertIn("most likely its USB connection dropped", out)
         self.assertNotIn("Linux saw no USB device disconnect", out)
 
+    def test_kinds_of_start(self):
+        log = Log().stats(3).add("Attempting MCU 'mcu' reset\nRestarting printer")
+        log.add("Start printer at Sat Nov 21 15:50:00 2026 (1795297800.0 2000.0)").stats(3)
+        log.add("box_detect: box1 removed\nRestarting printer")
+        log.add("Start printer at Sat Nov 21 15:55:00 2026 (1795298100.0 3000.0)").stats(3)
+        out = log.run_with_usb([
+            self.START_LINE,
+            "2026-11-21T15:54:55.000Z 1795298095.000 remove 2-1.2.1.2 1d50/614e/100 -"])
+        self.assertIn("Klipper starts (the last 3):", out)
+        self.assertIn("Klipper's service started", out)
+        self.assertIn("FIRMWARE_RESTART", out)
+        self.assertIn("RESTART (Klipper reloaded its config", out)
+        self.assertIn("      logged before it: box_detect: box1 removed", out)
+        self.assertIn("      USB 5.0 s before: a USB device (1d50/614e/100) disconnected on USB port 2-1.2.1.2", out)
+
     def test_low_memory_and_a_dry_queue(self):
         out = Log().stats(20, buffer=0.05, mem=30000).add(
             "Transition to shutdown state: MCU 'U_1' shutdown: Timer too close").run()
