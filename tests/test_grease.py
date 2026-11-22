@@ -58,8 +58,9 @@ class FakeSudo(object):
         return subprocess.CompletedProcess(command, 0, stdout="")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-STOCK = {"gcode_macro.cfg": os.path.join(HERE, "stock_gcode_macro_2.1.1.cfg"),
-         "printer.cfg": os.path.join(HERE, "stock_printer_2.1.1.cfg")}
+STOCK_DIR = os.path.join(HERE, "..", "stock", "plus4-2.1.1")
+STOCK = {"gcode_macro.cfg": os.path.join(STOCK_DIR, "gcode_macro.cfg"),
+         "printer.cfg": os.path.join(STOCK_DIR, "printer.cfg")}
 
 
 def stock_text(name="gcode_macro.cfg"):

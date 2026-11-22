@@ -83,6 +83,8 @@ Candidates, each needing a test on a Plus 4 before it ships:
 
 **Klipper report.** `python3 ~/plus4-grease/tools/klipper_report.py --all` reads `klippy.log` and says how busy each board and the mainboard's Linux processor were during the last print, which motors each board drives, and, for every time Klipper shut down ("Timer too close", "Lost communication", ...), what the numbers just before it point to: the Linux side stalling, a bad serial link, a board stepping too fast, or a temperature reading out of range. It only reads the log.
 
+**Config comparison.** `python3 ~/plus4-grease/tools/config_diff.py` compares your `printer.cfg`, `gcode_macro.cfg`, Box files and `moonraker.conf` with QIDI's stock V2.1.1 copies in `stock/plus4-2.1.1/`, section by section: what you added, removed and changed, macro bodies as a line diff, and the SAVE_CONFIG block. Plus4 Grease's own edits are taken out first. Serial numbers are hidden. It only reads, and saves its result to `~/plus4-grease-config-diff-<date>.txt`.
+
 What's known about the Plus 4's software is in [docs/plus4-notes.md](docs/plus4-notes.md). `tools/collect_plus4.py` gathers the same information from a printer, read-only, with serial numbers removed.
 
 ## For developers
