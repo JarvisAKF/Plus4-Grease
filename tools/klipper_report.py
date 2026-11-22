@@ -363,6 +363,7 @@ def summarize(stats, session):
            "stall": 0.0, "stall_at": None, "buffer_min": None, "print_stalls": 0, "boards": {}}
     cpu_max, cpu_time, cpu_span = None, 0.0, 0.0
     out["stretches"] = []   # [start, end, seconds, peak] where Klipper used 80% of a core or more
+    out["pauses"] = []      # [start, end, seconds, 0] where Klipper's main loop didn't run
     stall_first = stall_last = None
     prev = None
     for entry in stats:
@@ -401,10 +402,13 @@ def summarize(stats, session):
                         else:
                             out["stretches"].append([t0, t1, 1, used / dt])
                     cpu_time, cpu_span = cpu_time + used, cpu_span + dt
-                # Stats come every second while Klipper is busy or hot. A longer gap after a line that still
-                # had moves queued means Klipper's main loop didn't get to run.
-                if 1.5 < dt < 120 and g0.get("buffer_time", 0) > 0 and dt - 1.0 > out["stall"]:
-                    out["stall"], out["stall_at"] = dt - 1.0, t0
+                # Stats come every second while moves are queued or a heater is on or above 55°C. A longer
+                # gap after such a line means Klipper's main loop didn't get to run.
+                hot = any(h.get("target", 0) > 0 or h.get("temp", 0) > 55 for h in prev[3].values())
+                if 1.5 < dt < 30 and (g0.get("buffer_time", 0) > 0 or hot):
+                    out["pauses"].append([t0, t1, dt - 1.0, 0])
+                    if dt - 1.0 > out["stall"]:
+                        out["stall"], out["stall_at"] = dt - 1.0, t0
                 # Homing and probing run one move at a time ("drip" mode), and Klipper reports 0 queued
                 # then; print_stall counts the times the queue really ran dry.
                 if g1.get("print_time", 0) > g0.get("print_time", 0) and g1.get("buffer_time", 0) > 0:
@@ -444,11 +448,13 @@ def describe(summary, session, report, indent="  "):
                    indent, summary["cpu_max"], session.wall(summary["cpu_at"]), summary["cpu_avg"],
                    summary["cpu_busy"], "" if summary["cpu_busy"] == 1 else "s", summary["sysload"] or 0, CORES,
                    summary["memavail"] or 0))
-    if summary["stall"] >= 0.5:
-        report("{}Klipper's main loop stopped for about {:.1f} s at {} with moves queued.".format(
-            indent, summary["stall"], session.wall(summary["stall_at"])))
+    if summary["pauses"]:
+        report("{}Klipper's main loop paused {} time{} (no Stats line for over 1.5 s while busy or hot); the "
+               "longest was about {:.1f} s at {}.".format(
+                   indent, len(summary["pauses"]), "" if len(summary["pauses"]) == 1 else "s", summary["stall"],
+                   session.wall(summary["stall_at"])))
     else:
-        report("{}Klipper's main loop never stopped with moves queued.".format(indent))
+        report("{}Klipper's main loop never paused (a Stats line every second while busy or hot).".format(indent))
     if summary["print_stalls"]:
         report("{}The move queue ran dry {} time{} (print_stall): the Pi didn't send moves fast enough.".format(
             indent, summary["print_stalls"], "" if summary["print_stalls"] == 1 else "s"))
@@ -692,6 +698,15 @@ def main(argv=None):
             ", resumed {} time{} after a pause".format(resumes, "" if resumes == 1 else "s") if resumes else "",
             ended))
         describe(summary, session, report)
+        pauses = sorted(summary["pauses"], key=lambda s: -s[2])[:3]
+        if pauses:
+            report("")
+            report("  When Klipper's main loop paused (longest first), and what it logged then:")
+            for (start, stop, seconds, _), lines in zip(pauses, lines_near(paths, found, pauses, before=1.0,
+                                                                            after=0.0)):
+                report("    {}: {:.1f} s".format(session.wall(start), seconds))
+                for line in lines or ["(nothing logged)"]:
+                    report("        " + redact(line))
         stretches = sorted(summary["stretches"], key=lambda s: -s[2])[:3]
         if stretches:
             report("")

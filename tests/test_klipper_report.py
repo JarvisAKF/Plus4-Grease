@@ -175,7 +175,7 @@ class ReportTests(unittest.TestCase):
         self.assertIn("Klipper used up to 30% of a CPU core at", out)
         self.assertIn("0 seconds at 80% or more", out)
         self.assertIn("The move queue never ran dry", out)
-        self.assertIn("main loop never stopped", out)
+        self.assertIn("main loop never paused", out)
         self.assertIn("Board 'U_1' (stm32f401xc): busy up to 10% (fine)", out)
         self.assertIn("8% of its serial link", out)  # 4000 bytes/s of 50000
         self.assertIn("No shutdowns in this log", out)
@@ -336,6 +336,16 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn("0123456789ABCDEF01234567", out)
         self.assertNotIn("webhooks client", out)
         self.assertIn("stopped at file position 8066 (cancelled, or paused and not resumed)", out)
+
+    def test_a_pause_while_hot_and_idle_is_found(self):
+        # Heaters on, no moves queued (print start waiting), and a 3 s gap with a config save in it.
+        log = Log().add("Starting SD card print (position 0)").stats(10, buffer=0.0)
+        log.add("save_config: set [beacon model default] model_temp = 47.4").stats(1, buffer=0.0, step=4.0)
+        out = log.stats(10, buffer=0.0).add("Finished SD card print").run()
+        self.assertIn("Klipper's main loop paused 1 time", out)
+        self.assertIn("the longest was about 3.0 s", out)
+        self.assertIn("When Klipper's main loop paused (longest first), and what it logged then:", out)
+        self.assertIn("        save_config: set [beacon model default] model_temp = 47.4", out)
 
     def test_a_finished_print_isnt_called_stopped(self):
         log = Log().add("Starting SD card print (position 0)").stats(5).add(
