@@ -12,9 +12,11 @@ Small, reversible improvements and diagnostic tools for the **QIDI Plus 4** on Q
 
 Plus4 Grease is an add-on for QIDI's own software on the Plus 4. It keeps QIDI's firmware, Klipper, Moonraker, Fluidd, touchscreen and Box software as they are, and makes a few small edits to QIDI's Klipper config where QIDI's settings cost time for nothing. Each edit is checked against QIDI's original text before it's made, the file is backed up first, and `uninstall` undoes it.
 
+If you want it, it also adds a current Fluidd on its own port next to QIDI's, which stays where it is (see [A current Fluidd beside QIDI's](#a-current-fluidd-beside-qidis)).
+
 It also brings read-only tools for finding out what a Plus 4 is doing: a speed test, a Klipper report that explains shutdowns like "Timer too close" and "Lost communication", and a comparison of your config with QIDI's stock one.
 
-The ideas come from [Valve Oil](https://github.com/thelegendtubaguy/valve-oil), which does this for QIDI's Max 4, Plus 5 and Smart 5. Plus4 Grease is a separate project, written for the Plus 4's older software: Klipper on Python 3.7, Debian 10, and the `mks` user. This is version 0.4.
+The ideas come from [Valve Oil](https://github.com/thelegendtubaguy/valve-oil), which does this for QIDI's Max 4, Plus 5 and Smart 5. Plus4 Grease is a separate project, written for the Plus 4's older software: Klipper on Python 3.7, Debian 10, and the `mks` user. This is version 0.5.
 
 ## Plus4 Grease vs stock QIDI
 
@@ -28,7 +30,8 @@ The ideas come from [Valve Oil](https://github.com/thelegendtubaguy/valve-oil), 
 | When Klipper stops ("Timer too close", "Lost communication") | QIDI's generic message | `tools/klipper_report.py` says what the numbers just before it point to and matches USB events, so a Box rebooted by a power flicker shows as one |
 | Board fan (optional, `--board-fan`) | full speed whenever X/Y are enabled or the chamber heater is on | follows the hottest of the X/Y drivers and the mainboard chip, 30% floor while busy, full speed if Klipper shuts down |
 | Chamber temperature (optional, `--balanced-chamber`) | the heater follows one thermistor | the heater follows an average of the toolhead chip and that thermistor; see [Optional changes](#optional-changes) |
-| Firmware, Klipper, Moonraker, Fluidd, touchscreen, Box software | QIDI's | unchanged |
+| Web page (optional, `fluidd install`) | QIDI's Fluidd v1.30.4 on port 80, with QIDI's Box panel | QIDI's stays on port 80, untouched; Fluidd v1.38.1 is added on port 81, sent pre-compressed (a first visit downloads about 4.4 MB and the printer compresses nothing). No Box panel yet. |
+| Firmware, Klipper, Moonraker, QIDI's Fluidd, touchscreen, Box software | QIDI's | unchanged |
 
 Probing itself is unchanged; only the travel between points is faster. The Plus 4's X/Y motors are open-loop, and Valve Oil's Plus 5 lost position at 565 mm/s, so the speed was measured first: on a tested Plus 4, `tools/speed_test.py` ran X/Y up to 500 mm/s at the full 20000 mm/s² over the probing area with no lost steps. 300 leaves room for printers that haven't been tested, and faster would save under 2 s more per full mesh.
 
@@ -65,13 +68,35 @@ Two changes are off unless you ask for them, because they change how a fan and a
 
 Klipper shuts the printer down if the mean passes 80 °C or the sensors disagree by more than 70 °C, which catches a thermistor that fails open or shorted. QIDI's own `Chamber_Thermal_Protection_Sensor` at the heater is left as it is and still shuts the printer down at 140 °C. PID values are QIDI's; run `PID_CALIBRATE HEATER=chamber TARGET=60` afterwards if the chamber overshoots more than you like.
 
+## A current Fluidd beside QIDI's
+
+QIDI's web page is Fluidd v1.30.4 with QIDI's Box panel added. `fluidd install` adds upstream Fluidd v1.38.1 next to it, on port 81, and leaves QIDI's exactly as it is on port 80. Open whichever you like: `http://<printer-ip>/` is QIDI's, `http://<printer-ip>:81/` is the new one. (Port 8080 is taken by the camera.)
+
+- **What's different:** eight Fluidd versions of fixes and features since QIDI's copy. It's also lighter on the printer: every file comes pre-compressed and nginx sends it as stored, the browser keeps the hashed files for good, and this page writes no nginx access log. The whole folder is 17 MB.
+- **What it doesn't have yet:** QIDI's Box panel (slots, filament, drying). Keep using QIDI's page or the touchscreen for the Box. A Box card for the new Fluidd is the next step.
+- **Settings:** it keeps its own (Moonraker namespace `plus4_grease_fluidd`), so the two pages never overwrite each other's layout. The first install copies QIDI Fluidd's settings across, so your theme, macros and layout carry over.
+- **Cameras** are passed through to QIDI's page, so the new one uses the same camera setup.
+
+**Install.** Get `plus4-grease-fluidd-v1.38.1.zip` onto the printer next to `install.sh` or in your home folder. It's attached to the release, or build it with `tools/build_fluidd.sh` on a computer. From your computer (PowerShell, in the folder with the zip):
+```
+scp plus4-grease-fluidd-v1.38.1.zip mks@<printer-ip>:~/
+```
+Then on the printer:
+```
+bash ~/plus4-grease/install.sh fluidd install --dry-run
+bash ~/plus4-grease/install.sh fluidd install
+```
+It checks the zip's SHA-256, unpacks it to `~/plus4-grease-fluidd`, adds the nginx site `/etc/nginx/sites-available/plus4-grease-fluidd` with `sudo`, has nginx test the site, reloads nginx (QIDI's page and a running print aren't interrupted), and checks the new page loads and reaches Moonraker. If any step fails, it puts everything back. `--port` picks another port.
+
+**Remove:** `bash ~/plus4-grease/install.sh fluidd remove` deletes the site and the folder and reloads nginx. Its settings stay in Moonraker's database, so a reinstall picks them up.
+
 ## How it stays safe
 
 - **It only edits QIDI's stock text.** Each change looks for QIDI's exact lines from V2.1.1 and applies only where it finds them, once, at the start of a line (so a line you've commented out doesn't count). If you've changed that part yourself, for example with a Beacon probe conversion, that change is skipped and your file is left as it is. The one exception is the probe speeds, and only when you ask with `--replace-own-speeds`. After the restart, install checks that Klipper really loaded the new speeds, since another included file can set them again.
 - **Backups first.** Every file it changes is copied to `~/.plus4-grease/backups/` first.
 - **Klipper has to start.** After a change it restarts Klipper. If Klipper doesn't come back ready, it puts your files back by itself.
 - **Clean uninstall.** `uninstall` puts QIDI's lines back.
-- **One system file pair, nothing else.** The USB event log is the only part outside Klipper's config: a udev rule in `/etc/udev/rules.d/99-plus4-grease-usb.rules` and its script in `/usr/local/lib/plus4-grease/`, written with `sudo` and owned by root, since udev runs the script as root. `uninstall` removes both and leaves the log.
+- **Few system files.** Outside Klipper's config there's only the USB event log: a udev rule in `/etc/udev/rules.d/99-plus4-grease-usb.rules` and its script in `/usr/local/lib/plus4-grease/`, written with `sudo` and owned by root, since udev runs the script as root. `uninstall` removes both and leaves the log. If you add the new Fluidd, its nginx site file joins them; `fluidd remove` takes it out.
 - **It checks the printer.** It runs only on a Plus 4 (`/dev_info.txt` reads `QIDI@x-plus_4`) on firmware V2.1.1, as the `mks` user, and never while a print is running or paused.
 
 ## Install
@@ -109,6 +134,7 @@ Klipper restarts, so the printer ends up unhomed.
 ```
 bash ~/plus4-grease/install.sh status      # what's applied
 bash ~/plus4-grease/install.sh uninstall   # put QIDI's lines back
+bash ~/plus4-grease/install.sh fluidd status
 ```
 
 **After a QIDI firmware update,** run `install` again. QIDI's update can replace its config files, and `status` says so when it has.
@@ -126,6 +152,8 @@ What's known about the Plus 4's software and boards is in [docs/plus4-notes.md](
 ## What's next
 
 Candidates, each needing a test on a Plus 4 before it ships:
+
+- A Box card for the new Fluidd: slots, filament, humidity and Box temperature first, read-only, then the load, unload and drying buttons one at a time. Valve Oil's Fluidd has one for newer QIDI printers, and the Plus 4's Box reports the same layout on V2.1.1, so it's a port rather than a rewrite.
 
 - On hold: saving the config in the background, as Valve Oil does. On a Beacon Plus 4, `tools/klipper_report.py` found no pause in Klipper's main loop during print start's config save (a Stats line every second throughout), so there's nothing to win there yet. A stock Plus 4's numbers would settle it for QIDI's `G29`.
 - Fixes for QIDI Box bugs on the Plus 4, such as its Box software looking for the filament list in the wrong folder (`/home/qidi`).

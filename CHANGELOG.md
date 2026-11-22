@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0
+- Optional `fluidd install`: upstream Fluidd v1.38.1 on port 81, beside QIDI's Fluidd v1.30.4, which stays untouched on port 80. It's served by the printer's own nginx from `~/plus4-grease-fluidd` through its own site file. Every text file ships with a `.gz` copy that nginx sends as stored (`gzip_static`; on an nginx without it, the site compresses as it sends instead), hashed assets are cached by the browser for a year, and the site writes no access log. A first visit downloads about 4.4 MB.
+- The new Fluidd keeps its settings in its own Moonraker namespace, `plus4_grease_fluidd`; the first install copies QIDI Fluidd's settings in. Cameras are passed to QIDI's own site, so they work the same on both pages.
+- Install checks the bundle's SHA-256 and the port, has `nginx -t` test the site, reloads nginx, and checks that the page loads and reaches Moonraker; any failure puts everything back as it was, including an earlier version on an upgrade. `fluidd remove` deletes the site and the folder and keeps the settings.
+- New `tools/build_fluidd.sh` builds the bundle from Fluidd's own source on a computer.
+- `status` lists the new Fluidd too; `uninstall` reminds you it's still there.
+
 ## 0.4.0
 - Optional `install --board-fan`: QIDI's `[controller_fan board_fan]` is replaced by `plus4-grease-board-fan.cfg`, a fan driven by the X/Y TMC2240 driver temperatures (60-70 °C) and the mainboard chip (45-65 °C, new `[temperature_sensor mainboard_mcu]`), with a 30% floor while X/Y are enabled or the chamber is heating and full speed on shutdown. From JarvisAKF's Plus 4.
 - Optional `install --balanced-chamber`: the chamber heater follows the mean of the toolhead chip (`GD32`, counted three times) and QIDI's chamber thermistor (now `[temperature_sensor chamber_probe]`), with `max_power` 0.6, `max_temp` 80 °C and a 70 °C sensor-deviation limit; QIDI's 45-65 °C target range and bed assist are dropped. QIDI's `Chamber_Thermal_Protection_Sensor` (140 °C) is left as it is. From JarvisAKF's Plus 4.
