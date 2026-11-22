@@ -266,6 +266,33 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn("most likely its USB connection dropped", out)
         self.assertIn("USB events: 2 in plus4-grease-usb.log, the last 5:", out)
 
+    def test_power_flicker_on_the_box(self):
+        out = self.box_log().run_with_usb([
+            self.START_LINE,
+            "2026-11-21T00:01:00.000Z 1795290060.000 add 2-1.2.1.2 1d50/614e/100 Klipper QIDI_BOX_V1_1.1.1",
+            "2026-11-21T15:40:29.400Z 1795297229.400 remove 2-1.2.1.2 1d50/614e/100 -",
+            "2026-11-21T15:40:29.450Z 1795297229.450 remove 2-1.2.1 1a40/801/100 -",
+            "2026-11-21T15:40:31.000Z 1795297231.000 add 2-1.2.1 1a40/801/100 USB 2.0 Hub",
+            "2026-11-21T15:40:31.400Z 1795297231.400 add 2-1.2.1.2 483/5740/200 MKS COLOR BOOT",
+            "2026-11-21T15:40:33.900Z 1795297233.900 remove 2-1.2.1.2 483/5740/200 -",
+            "2026-11-21T15:40:34.300Z 1795297234.300 add 2-1.2.1.2 1d50/614e/100 Klipper QIDI_BOX_V1_1.1.1",
+        ])
+        self.assertIn("Klipper QIDI_BOX_V1_1.1.1 was gone for 4.9 s and started again from its bootloader, so "
+                      "it lost power or reset; a gap that short is a power flicker or a reset", out)
+        self.assertIn("Devices that went away and came back (the last 1):", out)
+
+    def test_box_switched_off_by_hand_for_a_while(self):
+        out = self.box_log().run_with_usb([
+            self.START_LINE,
+            "2026-11-22T00:03:08.526Z 1795305788.526 remove 2-1.2.1.2 1d50/614e/100 -",
+            "2026-11-22T00:03:38.672Z 1795305818.672 add 2-1.2.1.2 483/5740/200 MKS COLOR BOOT",
+            "2026-11-22T00:03:41.184Z 1795305821.184 remove 2-1.2.1.2 483/5740/200 -",
+            "2026-11-22T00:03:41.568Z 1795305821.568 add 2-1.2.1.2 1d50/614e/100 Klipper QIDI_BOX_V1_1.1.1",
+        ])
+        self.assertIn("Klipper QIDI_BOX_V1_1.1.1 was gone for 33.0 s and started again from its bootloader, so "
+                      "it lost power or reset.", out)
+        self.assertNotIn("power flicker", out)
+
     def test_box_stopped_answering_without_leaving_usb(self):
         out = self.box_log().run_with_usb([self.START_LINE])
         self.assertIn("Linux saw no USB device disconnect around it, so it stayed connected to the Pi", out)

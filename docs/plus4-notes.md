@@ -62,3 +62,10 @@ The Plus 4 predates the Max 4 and Plus 5 and runs a different software generatio
 - Whether Valve Oil's Klipper extras, which parse under Python 3.7, run against QIDI's Plus 4 Klipper.
 - Main-loop load and memory while printing.
 
+
+## QIDI Box on USB (seen on a Plus 4 with one Box, 2026-11-21)
+
+- The Box has its own USB hub (`1a40:0801`, "USB 2.0 Hub") with the Box board behind it, and both run on the Box's own power: switching the Box off removes the board, then the hub.
+- Every time the Box board starts, it first shows up as MKS's bootloader (`0483:5740`, "MKS COLOR BOOT") for about 2.5 s, then disconnects and comes back as Klipper firmware (`1d50:614e`, "Klipper QIDI_BOX_V1_1.1.1"). Seen from the Pi, a Box start is two connects with a disconnect between them.
+- A household power flicker rebooted the Box (gone about 2 s, then its bootloader, then Klipper) while the printer stayed up. One earlier "Lost communication with MCU 'mcu_box1'" matches the same thing. The printer's supply rides through flickers the Box's doesn't.
+- QIDI's Plus 4 Klipper has a compiled `box_detect` module; switching the Box off while idle logged no Klipper shutdown.

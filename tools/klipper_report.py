@@ -458,6 +458,43 @@ def read_usb_log(path):
     return events
 
 
+def is_bootloader(event):
+    """The Box board shows up as MKS's bootloader (0483:5740, 'MKS COLOR BOOT') for a few seconds every
+    time it starts, before Klipper's firmware takes over."""
+    return event.ids.startswith("483/5740/") or "BOOT" in event.name.upper()
+
+
+def outages(events):
+    """Each time a device went away and came back on the same port: (gone, back, seconds, rebooted).
+    rebooted is True when its bootloader came up on that port before it was back for good."""
+    found = []
+    for i, gone in enumerate(events):
+        if gone.action != "remove" or is_bootloader(gone):
+            continue
+        rebooted = False
+        for later in events[i + 1:]:
+            if later.epoch - gone.epoch > 300:
+                break
+            if later.port != gone.port or later.action != "add":
+                continue
+            if is_bootloader(later):
+                rebooted = True
+                continue
+            found.append((gone, later, later.epoch - gone.epoch, rebooted))
+            break
+    return found
+
+
+def outage_text(gone, back, seconds, rebooted):
+    name = back.name or gone.name or "a USB device ({})".format(gone.ids)
+    text = "{} was gone for {:.1f} s".format(name, seconds)
+    if rebooted:
+        text += " and started again from its bootloader, so it lost power or reset"
+        if seconds < 5:
+            text += "; a gap that short is a power flicker or a reset, not someone switching it off"
+    return text
+
+
 def usb_around(events, session, when):
     """(covered, events near it): covered when the log was already running before this moment."""
     if events is None or when is None or session.epoch is None:
@@ -465,7 +502,7 @@ def usb_around(events, session, when):
     moment = session.epoch + when - session.mono
     covered = bool(events) and events[0].epoch <= moment
     near = [e for e in events if moment - USB_BEFORE <= e.epoch <= moment + USB_AFTER and e.action != "start"]
-    return covered, [(e, e.epoch - moment) for e in near]
+    return covered, [(e, e.epoch - moment) for e in near], outages(events)
 
 
 def usb_text(event, offset=None):
@@ -478,10 +515,10 @@ def usb_text(event, offset=None):
 
 
 # ------------------------------------------------------------------ shutdowns
-def explain(message, before, session, usb=(False, [])):
+def explain(message, before, session, usb=(False, [], [])):
     """Plain findings for one shutdown, from the Stats lines just before it and the USB events around it."""
     s = summarize(before, session)
-    covered, near = usb
+    covered, near = usb[0], usb[1]
     named = NAMED_MCU.search(message)
     board = named.group(1) if named else None
     findings = []
@@ -529,9 +566,10 @@ def explain(message, before, session, usb=(False, [])):
         usb_board = board and "SERIAL_BAUD" not in session.boards.get(board, {})
         removed = [(e, dt) for e, dt in near if e.action == "remove"]
         if "Lost communication" in message and usb_board and removed:
+            back = [o for o in usb[2] if any(o[0] is e for e, _ in removed)] if len(usb) > 2 else []
             findings.insert(0, "Linux saw a USB disconnect just before: " + "; ".join(
                 usb_text(e, dt) for e, dt in removed) + ". The board was switched off, unplugged, lost power, "
-                "or reset; Klipper then lost it.")
+                "or reset; Klipper then lost it." + "".join(" " + outage_text(*o) + "." for o in back))
         elif "Lost communication" in message and usb_board and covered and not (host_busy or link_trouble):
             findings.append("Board '{}' stopped answering, but Linux saw no USB device disconnect around it, "
                             "so it stayed connected to the Pi: the board itself stopped responding (a firmware "
@@ -632,7 +670,7 @@ def main(argv=None):
         describe(summarize((e for e in (parse_entry(r) for r in result.tail) if e), latest), latest, report)
 
     usb_events = read_usb_log(os.path.join(os.path.dirname(paths[-1]), USB_LOG))
-    started = [s for s in sessions if s.started][-5:]
+    started = [s for s in sessions if s.started][-10:]
     if started:
         report("")
         report("Klipper starts (the last {}):".format(len(started)))
@@ -654,6 +692,12 @@ def main(argv=None):
             len([e for e in usb_events if e.action != "start"]), USB_LOG, ", the last 5:" if shown else "."))
         for event in shown:
             report("  {} UTC: {}".format(event.stamp.replace("T", " ").rstrip("Z")[:19], usb_text(event)))
+        gaps = [o for o in outages(usb_events) if not o[0].ids.startswith("1a40/")][-5:]
+        if gaps:
+            report("  Devices that went away and came back (the last {}):".format(len(gaps)))
+            for gone, back, seconds, rebooted in gaps:
+                report("    {} UTC: {}.".format(gone.stamp.replace("T", " ").rstrip("Z")[:19],
+                                               outage_text(gone, back, seconds, rebooted)))
 
     shutdowns = [(session, event) for session in sessions for event in session.events if event[0] == "shutdown"]
     report("")
