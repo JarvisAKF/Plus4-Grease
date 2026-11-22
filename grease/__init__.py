@@ -3,4 +3,4 @@
 Runs on the printer's own Python 3.7, so it uses 3.7 syntax and library features only.
 """
 
-VERSION = "0.7.0"
+VERSION = "0.7.1"

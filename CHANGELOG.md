@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.7.1
+- The Box card draws loaded filament past the hub to the toolhead, extruder and nozzle on the Plus 4 (Fluidd build 4). It looked for the filament switch QIDI's newer printers have at the toolhead; the Plus 4's toolhead sensor is `hall_filament_width_sensor`, which now counts as filament while its diameter reading is above its `min_diameter`, as QIDI's own runout check does. The same reading finds the external spool loaded.
+
 ## 0.7.0
 - The new Fluidd's Box card has Load, Unload, Eject and Read RFID for the selected slot (Fluidd build 3). They send exactly what QIDI's own Fluidd sends on V2.1.1: `E_LOAD slot=N`, `E_UNLOAD slot=N`, `E_BOX slot=N` and `RFID_READ SLOT=slotN`. Valve Oil's commands for QIDI's newer firmware are never sent. The buttons are off while printing, while the Box is busy or Klipper isn't ready, and until Klipper answers the last Box command; Load is off for the slot that's loaded and Unload for every other slot.
 

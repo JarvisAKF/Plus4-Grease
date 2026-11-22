@@ -77,9 +77,9 @@ QIDI's web page is Fluidd v1.30.4 with QIDI's Box panel added. `fluidd install` 
 - **Settings:** it keeps its own (Moonraker namespace `plus4_grease_fluidd`), so the two pages never overwrite each other's layout. The first install copies QIDI Fluidd's settings across, so your theme, macros and layout carry over.
 - **Cameras** are passed through to QIDI's page, so the new one uses the same camera setup.
 
-**Install.** Get `plus4-grease-fluidd-v1.38.1-3.zip` onto the printer next to `install.sh` or in your home folder. It's attached to the release, or build it with `tools/build_fluidd.sh` on a computer. From your computer (PowerShell, in the folder with the zip):
+**Install.** Get `plus4-grease-fluidd-v1.38.1-4.zip` onto the printer next to `install.sh` or in your home folder. It's attached to the release, or build it with `tools/build_fluidd.sh` on a computer. From your computer (PowerShell, in the folder with the zip):
 ```
-scp plus4-grease-fluidd-v1.38.1-3.zip mks@<printer-ip>:~/
+scp plus4-grease-fluidd-v1.38.1-4.zip mks@<printer-ip>:~/
 ```
 Then on the printer:
 ```
