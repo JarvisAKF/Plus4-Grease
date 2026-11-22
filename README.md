@@ -81,7 +81,7 @@ Candidates, each needing a test on a Plus 4 before it ships:
 
 **Speed test.** `python3 ~/plus4-grease/tools/speed_test.py` moves the toolhead over the probing area at rising speeds, staying out of QIDI's no-print zones, and re-homes after each to find where steps start getting lost. It changes no files, and results go to `~/plus4-grease-speed-test-<date>.txt`. Results from more printers help decide whether 300 mm/s can go higher; please share yours in an issue.
 
-**Klipper report.** `python3 ~/plus4-grease/tools/klipper_report.py --all` reads `klippy.log` and says how busy each board and the Pi were during the last print, which motors each board drives, and, for every time Klipper shut down ("Timer too close", "Lost communication", ...), what the numbers just before it point to: the Pi stalling, a bad serial link, a board stepping too fast, or a temperature reading out of range. It only reads the log.
+**Klipper report.** `python3 ~/plus4-grease/tools/klipper_report.py --all` reads `klippy.log` and says how busy each board and the mainboard's Linux processor were during the last print, which motors each board drives, and, for every time Klipper shut down ("Timer too close", "Lost communication", ...), what the numbers just before it point to: the Linux side stalling, a bad serial link, a board stepping too fast, or a temperature reading out of range. It only reads the log.
 
 What's known about the Plus 4's software is in [docs/plus4-notes.md](docs/plus4-notes.md). `tools/collect_plus4.py` gathers the same information from a printer, read-only, with serial numbers removed.
 

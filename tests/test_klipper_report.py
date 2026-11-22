@@ -186,7 +186,7 @@ class ReportTests(unittest.TestCase):
         out = log.add("Transition to shutdown state: MCU 'U_1' shutdown: Timer too close\n"
                       "This often indicates the host computer is overloaded.").run()
         self.assertIn("MCU 'U_1' shutdown: Timer too close", out)
-        self.assertIn("The Pi fell behind: Klipper's main loop stopped for about 2.0 s", out)
+        self.assertIn("The Linux side fell behind: Klipper's main loop stopped for about 2.0 s", out)
         self.assertIn("Klipper shut down: MCU 'U_1' shutdown: Timer too close", out)
 
     def test_timer_too_close_with_nothing_in_the_numbers(self):
@@ -295,7 +295,7 @@ class ReportTests(unittest.TestCase):
 
     def test_box_stopped_answering_without_leaving_usb(self):
         out = self.box_log().run_with_usb([self.START_LINE])
-        self.assertIn("Linux saw no USB device disconnect around it, so it stayed connected to the Pi", out)
+        self.assertIn("Linux saw no USB device disconnect around it, so it stayed connected to the mainboard", out)
 
     def test_without_the_usb_log(self):
         out = self.box_log().run_with_usb(None)

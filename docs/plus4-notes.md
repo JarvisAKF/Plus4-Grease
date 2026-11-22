@@ -66,6 +66,15 @@ The Plus 4 predates the Max 4 and Plus 5 and runs a different software generatio
 ## QIDI Box on USB (seen on a Plus 4 with one Box, 2026-11-21)
 
 - The Box has its own USB hub (`1a40:0801`, "USB 2.0 Hub") with the Box board behind it, and both run on the Box's own power: switching the Box off removes the board, then the hub.
-- Every time the Box board starts, it first shows up as MKS's bootloader (`0483:5740`, "MKS COLOR BOOT") for about 2.5 s, then disconnects and comes back as Klipper firmware (`1d50:614e`, "Klipper QIDI_BOX_V1_1.1.1"). Seen from the Pi, a Box start is two connects with a disconnect between them.
+- Every time the Box board starts, it first shows up as MKS's bootloader (`0483:5740`, "MKS COLOR BOOT") for about 2.5 s, then disconnects and comes back as Klipper firmware (`1d50:614e`, "Klipper QIDI_BOX_V1_1.1.1"). Seen from the mainboard, a Box start is two connects with a disconnect between them.
 - A household power flicker rebooted the Box (gone about 2 s, then its bootloader, then Klipper) while the printer stayed up. One earlier "Lost communication with MCU 'mcu_box1'" matches the same thing. The printer's supply rides through flickers the Box's doesn't.
 - QIDI's Plus 4 Klipper has a compiled `box_detect` module; switching the Box off while idle logged no Klipper shutdown.
+
+## Boards (from QIDI's 2.1.1 `printer.cfg` and a Plus 4's `klippy.log`)
+
+There is no separate single-board computer. The mainboard carries both processors:
+
+- **Linux processor:** a Rockchip RK3328 (four Cortex-A53 cores, 1 GB RAM, eMMC), on Makerbase's MKS PI design (hence the hostname `mkspi` and user `mks`). It runs Armbian, Klipper's host software (klippy), Moonraker, Fluidd, and QIDI's touchscreen app `xindi`.
+- **`U_1`, STM32F401 at 84 MHz:** on the mainboard, on the RK3328's `/dev/ttyS0` at 500000 baud. Drives X, Y, both Z motors, the bed and chamber heaters, the chamber and auxiliary fans, and reads QIDI's probe (`smart_effector` on `U_1:PC1`).
+- **`mcu`, STM32F103 at 72 MHz:** the toolhead board, on `/dev/ttyS2` at 500000 baud. Drives the extruder motor and heater, the part cooling fan and the hotend fans.
+- **USB:** the QIDI Box (its own STM32F401 behind its own hub) and, on a conversion, a Beacon.

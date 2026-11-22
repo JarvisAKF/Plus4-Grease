@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Klipper report for the QIDI Plus 4: how loaded the boards and the Pi were, and why Klipper stopped.
+"""Klipper report for the QIDI Plus 4: how loaded the boards and the mainboard's Linux processor were, and why Klipper stopped.
 
 Run on the printer as mks:
 
@@ -7,11 +7,11 @@ Run on the printer as mks:
     python3 ~/plus4-grease/tools/klipper_report.py --all    # klippy.log and the older days next to it
 
 It only reads klippy.log. While the printer is busy or hot, Klipper writes a Stats line every second with
-each board's load and link counters and the Pi's load and memory. This reads those lines and reports:
+each board's load and link counters and the Linux side's load and memory. This reads those lines and reports:
 
 - the boards, the chip on each, and which motors each one drives at how many microsteps;
 - for the last print: how busy each board was, how much of its serial link it used, link errors, and how
-  hard the Pi worked, including any time Klipper's main loop stopped;
+  hard the Linux side worked, including any time Klipper's main loop stopped;
 - for each time Klipper shut down ("Timer too close", "Lost communication", ...): what the numbers in the
   half minute before it point to. Klipper's own advice for "Timer too close" names every possible cause at
   once; the numbers usually rule most of them out.
@@ -68,7 +68,7 @@ def number(text):
 
 def parse_stats(text):
     """One Stats line: (globals, boards, heaters). Board and heater figures follow a 'name:' token; the
-    toolhead's and the Pi's have no name in front, so they're picked out by key."""
+    toolhead's and the Linux side's have no name in front, so they're picked out by key."""
     top, boards, heaters = {}, {}, {}
     name = None
     for token in text.split():
@@ -151,7 +151,7 @@ class Scan(object):
     """One cheap pass over the logs, line by line, keeping only what the report needs: the sessions with
     their boards, config, and shutdowns (each with the Stats lines just before it), where the last print
     starts and ends, and the last few minutes of Stats. A day of klippy.log can be 60 MB or more, which
-    the Pi can't hold in memory, so Stats lines are only parsed for those stretches."""
+    the printer can't hold in memory, so Stats lines are only parsed for those stretches."""
 
     def __init__(self):
         self.sessions = [Session()]
@@ -443,7 +443,7 @@ def level(value, busy, high):
 
 def describe(summary, session, report, indent="  "):
     if summary["cpu_max"] is not None:
-        report("{}Pi: Klipper used up to {:.0f}% of a CPU core at {} ({:.0f}% on average, {} second{} at 80% or "
+        report("{}Linux side (the mainboard's RK3328): Klipper used up to {:.0f}% of a CPU core at {} ({:.0f}% on average, {} second{} at 80% or "
                "more); system load up to {:.2f} on {} cores; memory free down to {:.0f} MB.".format(
                    indent, summary["cpu_max"], session.wall(summary["cpu_at"]), summary["cpu_avg"],
                    summary["cpu_busy"], "" if summary["cpu_busy"] == 1 else "s", summary["sysload"] or 0, CORES,
@@ -456,7 +456,7 @@ def describe(summary, session, report, indent="  "):
     else:
         report("{}Klipper's main loop never paused (a Stats line every second while busy or hot).".format(indent))
     if summary["print_stalls"]:
-        report("{}The move queue ran dry {} time{} (print_stall): the Pi didn't send moves fast enough.".format(
+        report("{}The move queue ran dry {} time{} (print_stall): the Linux side didn't send moves fast enough.".format(
             indent, summary["print_stalls"], "" if summary["print_stalls"] == 1 else "s"))
     else:
         report("{}The move queue never ran dry (print_stall stayed the same).".format(indent))
@@ -570,7 +570,7 @@ def explain(message, before, session, usb=(False, [], [])):
     if s["cpu_max"] is not None and s["cpu_max"] >= 90:
         host_busy.append("Klipper used {:.0f}% of a CPU core".format(s["cpu_max"]))
     if s["sysload"] is not None and s["sysload"] >= CORES:
-        host_busy.append("the Pi's load was {:.2f} on {} cores".format(s["sysload"], CORES))
+        host_busy.append("the Linux side's load was {:.2f} on {} cores".format(s["sysload"], CORES))
     if s["memavail"] is not None and s["memavail"] < 50:
         host_busy.append("only {:.0f} MB of memory was free".format(s["memavail"]))
     if s["print_stalls"]:
@@ -596,7 +596,7 @@ def explain(message, before, session, usb=(False, [], [])):
     elif "Timer too close" in message or "Missed scheduling" in message or "Lost communication" in message \
             or "Timeout with MCU" in message:
         if host_busy:
-            findings.append("The Pi fell behind: " + "; ".join(host_busy) + ". Commands then reached the "
+            findings.append("The Linux side fell behind: " + "; ".join(host_busy) + ". Commands then reached the "
                             "board too late.")
         if link_trouble:
             findings.append("The serial link had errors: " + "; ".join(link_trouble) + ". Check that "
@@ -613,15 +613,15 @@ def explain(message, before, session, usb=(False, [], [])):
                 "or reset; Klipper then lost it." + "".join(" " + outage_text(*o) + "." for o in back))
         elif "Lost communication" in message and usb_board and covered and not (host_busy or link_trouble):
             findings.append("Board '{}' stopped answering, but Linux saw no USB device disconnect around it, "
-                            "so it stayed connected to the Pi: the board itself stopped responding (a firmware "
+                            "so it stayed connected to the mainboard: the board itself stopped responding (a firmware "
                             "fault or a hang) rather than being switched off or unplugged.".format(board))
         elif "Lost communication" in message and not (host_busy or link_trouble):
-            findings.append("Board '{}' stopped answering without link errors or a stalled Pi before it: most "
+            findings.append("Board '{}' stopped answering without link errors or a stalled Linux side before it: most "
                             "likely {}.".format(board, "its USB connection dropped (cable or plug, the board "
                             "losing power or being switched off, or the board resetting)" if usb_board else
                             "its power, its cable coming loose, or the board resetting"))
         if not findings:
-            findings.append("Nothing in Klipper's statistics points to the Pi, the link, or the board being "
+            findings.append("Nothing in Klipper's statistics points to the Linux side, the link, or the board being "
                             "overloaded. Something sent a command too late without leaving a trace in the "
                             "log, so this needs a Klipper module that names late commands as they're sent.")
     else:
@@ -644,7 +644,7 @@ def main(argv=None):
     parser.add_argument("--all", action="store_true", help="also read the older days' logs next to it")
     args = parser.parse_args(argv)
     try:
-        os.nice(10)  # stay out of Klipper's way on the Pi
+        os.nice(10)  # stay out of Klipper's way on the printer
     except OSError:
         pass
     paths = [p for p in log_files(args.log, args.all) if os.path.isfile(p)]
