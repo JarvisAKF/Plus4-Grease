@@ -1,6 +1,7 @@
 # Changelog
 
 ## 0.10.0
+- Corrected: QIDI's touchscreen dries the Box with QIDI's own `ENABLE_BOX_DRY BOX=1 TEMP=<°C> END_TIME=<hours>` / `DISABLE_BOX_DRY BOX=1` (a timer kept by QIDI's Box module, no humidity control), not by setting the heater directly as 0.9.0's notes said. `GREASE_BOX_DRY` is unchanged. Found in qbdisplay's notes and confirmed in QIDI's `box_extras.so`.
 - The new Fluidd's Box card has **Edit filament** (the pencil beside a slot's label; Fluidd build 8): pick the slot's vendor, filament and color from QIDI's filament list for any spool, with or without an RFID tag. It saves them as QIDI's own page and touchscreen do on V2.1.1: `SAVE_VARIABLE VARIABLE=vendor_slotN VALUE="<ID>"`, then `filament_slotN` and `color_slotN`, slot 16 being the external spool. Off while the Box or a print is busy and for an empty Box slot. From Valve Oil's Fluidd.
 - `docs/plus4-notes.md` says how the Plus 4's Box reads spool tags, and why Valve Oil's Box firmware that reads other brands' tags doesn't fit the Plus 4's Box as it is.
 
@@ -9,7 +10,7 @@
 - `install` updates a file an earlier Plus4 Grease version wrote for a change (recognized by its SHA-256), without the change's switch again; `status` shows it as `update`. 0.9.0's `plus4-grease-box-dry.cfg` is updated this way.
 
 ## 0.9.0
-- Optional `install --box-dry`: Box drying with a timer and humidity control, kept by Klipper so it carries on with the web page closed. (Its macro names didn't work; fixed in 0.9.1.) `PLUS4_BOX_DRY BOX=1 TEMP=45 HOURS=4 HUMIDITY=20` sets the Box heater as QIDI's touchscreen does (`SET_HEATER_TEMPERATURE HEATER=heater_box1`), stops after the hours given (0 runs until stopped), and with `HUMIDITY` switches the heater off at or below that humidity and back on 5 points above it. `PLUS4_BOX_DRY_STOP BOX=1` stops it. It never goes above QIDI's Box limit for the filaments loaded (a table from QIDI's V2.1.1 `officiall_filas_list.cfg`; 0 for PLA and TPU refuses to heat), refuses a loaded filament that table doesn't have, and stops if the Box heater is changed elsewhere. The macros are in `plus4-grease-box-dry.cfg`, included from `printer.cfg`; `uninstall` removes both.
+- Optional `install --box-dry`: Box drying with a timer and humidity control, kept by Klipper so it carries on with the web page closed. (Its macro names didn't work; fixed in 0.9.1.) `PLUS4_BOX_DRY BOX=1 TEMP=45 HOURS=4 HUMIDITY=20` sets the Box heater (`SET_HEATER_TEMPERATURE HEATER=heater_box1`), stops after the hours given (0 runs until stopped), and with `HUMIDITY` switches the heater off at or below that humidity and back on 5 points above it. `PLUS4_BOX_DRY_STOP BOX=1` stops it. It never goes above QIDI's Box limit for the filaments loaded (a table from QIDI's V2.1.1 `officiall_filas_list.cfg`; 0 for PLA and TPU refuses to heat), refuses a loaded filament that table doesn't have, and stops if the Box heater is changed elsewhere. The macros are in `plus4-grease-box-dry.cfg`, included from `printer.cfg`; `uninstall` removes both.
 - The new Fluidd's Box card has drying controls when `--box-dry` is installed: temperature, hours and humidity, Dry and Stop, and what's running (Fluidd build 6).
 - `tests/test_box_dry.py` renders the drying macros as Klipper does (Jinja2) against a pretend Plus 4 and checks the limits, timer, humidity switching and hand-over.
 

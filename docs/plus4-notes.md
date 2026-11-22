@@ -85,3 +85,20 @@ There is no separate single-board computer. The mainboard carries both processor
 - QIDI's tag format is public ([QIDI wiki](https://wiki.qidi3d.com/en/QIDIBOX/RFID)): a MIFARE Classic 1K tag with QIDI's material, color and vendor codes in sector 1, block 0 (data block 4). Blank MIFARE Classic tags written in that format with a phone or a tag writer read on the Box like QIDI's own spools. SimplyPrint, NFC-Spool (Android), QBox NFC Tagger and others write them.
 - Valve Oil makes the Box read Bambu Lab, Anycubic, Elegoo, Creality, TigerTag and OpenTag3D tags with its own Box firmware, built from QIDI's USB Box firmware `02.03.01.21` for the Max 4, Plus 5 and Smart 5: it adds two raw reader commands (`fm17550_select`, `fm17550_transceive`) in place of four unused QIDI test commands, and a Klipper module decodes each brand's format. Its flasher only accepts that exact QIDI image (by hash). The Plus 4's Box runs QIDI's `V1_1.1.1` firmware with QIDI's older host modules, so porting it would mean the same patch made for that firmware, and checked as carefully, before flashing a Box.
 - Without tags, a slot's filament can be set by hand: the touchscreen, QIDI's page, or Edit filament on Plus4 Grease's Fluidd, all save `filament_slotN`, `vendor_slotN` and `color_slotN`.
+
+## Box commands QIDI's touchscreen sends (V2.1.1)
+
+From [qbdisplay](https://github.com/CharlyBrownFR/qbdisplay-plus4) (CharlyBrownFR, GPL-3.0), which recorded what QIDI's display program (`makerbase-client`, "xindi") sends, and checked against the command names in QIDI's `box_extras.so`:
+
+| What | Command |
+|---|---|
+| Load, unload, eject a slot | `E_LOAD SLOT=<n>`, `E_UNLOAD SLOT=<n>`, `E_BOX SLOT=<n>` (QIDI's Fluidd sends `slot=<n>`; Klipper reads either); the external spool is slot 16 |
+| Read a slot's tag | `RFID_READ SLOT=slot<n>` |
+| Dry Box 1 | `ENABLE_BOX_DRY BOX=1 TEMP=<°C> END_TIME=<hours>`, stopped with `DISABLE_BOX_DRY BOX=1`; `box_extras` reports `dry_state` and `end_time` |
+| Retry a failed Box step | `TRY_MOVE_AGAIN` |
+| Box self-check | `BOX_SELF_INSPECTION` |
+| Automatic reload on/off | `SAVE_VARIABLE VARIABLE=auto_reload_detect VALUE=<0/1>` |
+
+`box_extras.boxes[b]` also has `box_inserted_<i>` and `filament_inserted_<i>` for each slot, and the Box's AHT20 readings. Without a Box (unplugged), QIDI comments the Box out of `box.cfg` and restarts Klipper; `box_extras` is then gone and the external spool is in `multi_color_controller.extra.filament_info`.
+
+QIDI's display file (`800_480.tft`) is flashed by copying a new one to `/root/800_480.tft` and restarting `makerbase-client`, which loads it onto the screen and deletes it when done; QIDI keeps the previous one as `/root/800_480.tft.bak`.
