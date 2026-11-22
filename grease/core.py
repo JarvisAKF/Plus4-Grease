@@ -1,6 +1,7 @@
 """Install, uninstall, and status for Plus4 Grease. Python 3.7."""
 import collections
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -104,16 +105,20 @@ def swap(text, old, new):
 
 
 def feature_status(text_by_file, feature):
-    """'applied', 'available', or 'skipped' (the file isn't QIDI's stock text where it matters). A file the
-    feature creates counts as applied when it's there with the feature's text, available when it's not
-    there, and skipped when something else is there."""
+    """'applied', 'available', 'update', or 'skipped' (the file isn't QIDI's stock text where it matters). A
+    file the feature creates counts as applied when it's there with the feature's text, available when it's
+    not there, update when it's an earlier Plus4 Grease version's (feature.replaces), and skipped when
+    something else is there."""
     states = []
+    older = {(name, digest) for name, digest in feature.replaces or ()}
     for name, content in feature.files or ():
         text = text_by_file.get(name)
         if text is None:
             states.append("available")
         elif text == content:
             states.append("applied")
+        elif (name, hashlib.sha256(text.encode("utf-8")).hexdigest()) in older:
+            states.append("update")
         else:
             return "skipped"
     for edit in feature.edits:
@@ -131,12 +136,16 @@ def feature_status(text_by_file, feature):
         return "applied"
     if all(s == "available" for s in states):
         return "available"
+    if "update" in states and all(s in ("applied", "update") for s in states):
+        return "update"
     return "skipped"
 
 
 def apply_feature(text_by_file, feature):
+    """Makes each edit still to be made (an update has its edits already) and writes the feature's files."""
     for edit in feature.edits:
-        text_by_file[edit.file] = swap(text_by_file[edit.file], edit.find, edit.replace)
+        if len(occurrences(text_by_file[edit.file], edit.find)) == 1:
+            text_by_file[edit.file] = swap(text_by_file[edit.file], edit.find, edit.replace)
     for name, content in feature.files or ():
         text_by_file[name] = content
 
@@ -361,7 +370,7 @@ def mark_applied(paths, feature_id, on):
 
 def install(paths, klipper, report, dry_run=False, replace_own=False, runner=None, root=None, options=()):
     texts, rows = plan(paths, replace_own, options)
-    todo = [row for row in rows if row.status == "available"]
+    todo = [row for row in rows if row.status in ("available", "update")]
     usb = system.status(paths, root)
     for row in rows:
         report("  {:9}  {}".format(row.status, row.feature.title))
@@ -369,6 +378,8 @@ def install(paths, klipper, report, dry_run=False, replace_own=False, runner=Non
             report("             Replacing your {}; uninstall puts it back.".format(row.note))
         elif row.status == "optional":
             report("             Off unless you ask: add --{} to install it.".format(row.feature.option))
+        elif row.status == "update":
+            report("             An earlier Plus4 Grease version of this is installed; this updates it.")
         elif row.status == "skipped":
             report("             " + skip_reason(row))
     report_usb(usb, report)
@@ -429,7 +440,7 @@ def install(paths, klipper, report, dry_run=False, replace_own=False, runner=Non
 def uninstall(paths, klipper, report, runner=None, root=None):
     texts, rows = plan(paths)
     state = load_state(paths)
-    todo = [row.feature for row in rows if row.status == "applied"]
+    todo = [row.feature for row in rows if row.status in ("applied", "update")]
     for row in rows:
         if row.status == "skipped" and row.feature.id in state.get("applied", []):
             report("  left alone  {} (changed since install)".format(row.feature.title))
@@ -478,6 +489,8 @@ def status(paths, report, root=None):
             note = " (replacing your {})".format(state["own_values"][row.feature.id]["was"])
         elif row.status == "optional":
             note = "\n             Off unless you ask: install --{} adds it.".format(row.feature.option)
+        elif row.status == "update":
+            note = "\n             An earlier Plus4 Grease version of this is installed; install updates it."
         elif row.status == "skipped":
             note = "\n             " + skip_reason(row)
         report("  {:9}  {}{}".format(row.status, row.feature.title, note))

@@ -1,6 +1,6 @@
 diff --git a/src/components/widgets/qidiBox/QidiBoxCard.vue b/src/components/widgets/qidiBox/QidiBoxCard.vue
 new file mode 100644
-index 0000000..9d4ac73
+index 0000000..f00a7f8
 --- /dev/null
 +++ b/src/components/widgets/qidiBox/QidiBoxCard.vue
 @@ -0,0 +1,553 @@
@@ -425,9 +425,9 @@ index 0000000..9d4ac73
 +    return Array.from({ length: this.boxCount }, (_, i) => i + 1)
 +  }
 +
-+  // Plus4 Grease's --box-dry config adds PLUS4_BOX_DRY.
++  // Plus4 Grease's --box-dry config adds GREASE_BOX_DRY.
 +  get canDry (): boolean {
-+    return 'PLUS4_BOX_DRY' in this.$typedGetters['printer/getAvailableCommands']
++    return 'GREASE_BOX_DRY' in this.$typedGetters['printer/getAvailableCommands']
 +  }
 +
 +  heaterLimit (box: number): number | null {
@@ -559,7 +559,7 @@ index 0000000..9d4ac73
 +</style>
 diff --git a/src/components/widgets/qidiBox/QidiBoxDry.vue b/src/components/widgets/qidiBox/QidiBoxDry.vue
 new file mode 100644
-index 0000000..27ee2a2
+index 0000000..988032b
 --- /dev/null
 +++ b/src/components/widgets/qidiBox/QidiBoxDry.vue
 @@ -0,0 +1,205 @@
@@ -668,7 +668,7 @@ index 0000000..27ee2a2
 +</template>
 +
 +<script lang="ts">
-+// Plus4 Grease: drying for one QIDI Box, through PLUS4_BOX_DRY and PLUS4_BOX_DRY_STOP from the Plus4 Grease
++// Plus4 Grease: drying for one QIDI Box, through GREASE_BOX_DRY and GREASE_BOX_DRY_STOP from the Plus4 Grease
 +// --box-dry config (grease/plus4-grease-box-dry.cfg). Klipper keeps the timer and the humidity control, so drying
 +// carries on with this page closed. The macro enforces QIDI's filament limit itself; this form only suggests it.
 +import { Component, Mixins, Prop, Watch } from 'vue-property-decorator'
@@ -711,7 +711,7 @@ index 0000000..27ee2a2
 +  }
 +
 +  get state (): DryState {
-+    return this.$typedState.printer.printer[`gcode_macro _PLUS4_BOX_DRY_${this.box}`] ?? {}
++    return this.$typedState.printer.printer[`gcode_macro _GREASE_BOX_DRY_${this.box}`] ?? {}
 +  }
 +
 +  get active (): boolean {
@@ -749,13 +749,13 @@ index 0000000..27ee2a2
 +    if (!this.valid || this.active) return
 +
 +    this.sendGcode(
-+      `PLUS4_BOX_DRY BOX=${this.box} TEMP=${Math.round(this.temp)} HOURS=${this.hours} HUMIDITY=${Math.round(this.humidity)}`,
++      `GREASE_BOX_DRY BOX=${this.box} TEMP=${Math.round(this.temp)} HOURS=${this.hours} HUMIDITY=${Math.round(this.humidity)}`,
 +      this.waitKey
 +    )
 +  }
 +
 +  stop () {
-+    this.sendGcode(`PLUS4_BOX_DRY_STOP BOX=${this.box}`, this.waitKey)
++    this.sendGcode(`GREASE_BOX_DRY_STOP BOX=${this.box}`, this.waitKey)
 +  }
 +}
 +</script>
@@ -2171,7 +2171,7 @@ index ed39791..d4b391b 100644
  
  export const SupportedLocales = Object.freeze([
 diff --git a/src/locales/en.yaml b/src/locales/en.yaml
-index 217e550..ae42e3d 100644
+index 217e550..73ad6b7 100644
 --- a/src/locales/en.yaml
 +++ b/src/locales/en.yaml
 @@ -1456,6 +1456,239 @@ app:
@@ -2276,7 +2276,7 @@ index 217e550..ae42e3d 100644
 +      flow_failed_help: Retry runs the step again; Stop ends the Box operation.
 +      flow_failed_read_only: Retry or stop it on the touchscreen or on QIDI's page (port 80).
 +      plus4_commands: Load, Unload, Eject, Read RFID and Box settings send the same commands as QIDI's own page. Drying is on the touchscreen; Plus4 Grease's install --box-dry adds it here.
-+      plus4_commands_dry: Load, Unload, Eject, Read RFID and Box settings send the same commands as QIDI's own page. Drying uses Plus4 Grease's PLUS4_BOX_DRY, which keeps its timer on the printer.
++      plus4_commands_dry: Load, Unload, Eject, Read RFID and Box settings send the same commands as QIDI's own page. Drying uses Plus4 Grease's GREASE_BOX_DRY, which keeps its timer on the printer.
 +      plus4_heater_limit: Box {box} heater up to {temp}°C, the lowest Box limit of the filaments loaded in it.
 +      plus4_heater_locked: Box {box} heater locked at 0°C. A filament loaded in it can't be heated in the Box (QIDI's limit; PLA and TPU are 0).
 +      loaded: Loaded %{slot}

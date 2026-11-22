@@ -3,6 +3,7 @@
 They run each change against QIDI's stock 2.1.1 gcode_macro.cfg and printer.cfg and against hand-changed
 copies, and run install and uninstall against a fake printer folder with a fake Klipper.
 """
+import hashlib
 import os
 import shutil
 import subprocess
@@ -399,11 +400,42 @@ class OptInTests(unittest.TestCase):
         self.assertEqual(text.count("[include box.cfg]"), 1)
         dry = self.printer.paths.config_file("plus4-grease-box-dry.cfg")
         with open(dry) as handle:
-            self.assertIn("[gcode_macro PLUS4_BOX_DRY]", handle.read())
+            self.assertIn("[gcode_macro GREASE_BOX_DRY]", handle.read())
         self.assertIn("box_dry", core.load_state(self.printer.paths)["applied"])
         core.uninstall(self.printer.paths, FakeKlipper(), self.printer.report)
         self.assertFalse(os.path.exists(dry))
         self.assertEqual(self.printer.text("printer.cfg"), stock_text("printer.cfg"))
+
+    def test_box_dry_from_0_9_0_is_updated_without_asking_again(self):
+        # 0.9.0 wrote macros named PLUS4_BOX_DRY, which Klipper reads as PLUS4; this is that file, by its hash.
+        feature = next(f for f in core.FEATURES if f.id == "box_dry")
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, options=["box-dry"])
+        dry = self.printer.paths.config_file("plus4-grease-box-dry.cfg")
+        old = feature.files[0][1].replace("GREASE_BOX_DRY", "PLUS4_BOX_DRY")
+        with open(dry, "w", newline="") as handle:
+            handle.write(old)
+        with mock.patch.object(core, "FEATURES", [f._replace(replaces=((
+                "plus4-grease-box-dry.cfg", hashlib.sha256(old.encode("utf-8")).hexdigest()),))
+                if f.id == "box_dry" else f for f in core.FEATURES]):
+            self.printer.lines = []
+            core.status(self.printer.paths, self.printer.report)
+            self.assertTrue(any(line.startswith("  update") and "Box drying" in line for line in self.printer.lines))
+            core.install(self.printer.paths, FakeKlipper(), self.printer.report)
+            with open(dry) as handle:
+                self.assertEqual(handle.read(), feature.files[0][1])
+            self.assertIn("box_dry", core.load_state(self.printer.paths)["applied"])
+            self.assertEqual(self.printer.text("printer.cfg").count("[include plus4-grease-box-dry.cfg]"), 1)
+            with open(dry, "w", newline="") as handle:
+                handle.write(old)
+            core.uninstall(self.printer.paths, FakeKlipper(), self.printer.report)
+        self.assertFalse(os.path.exists(dry))
+        self.assertEqual(self.printer.text("printer.cfg"), stock_text("printer.cfg"))
+
+    def test_box_dry_replaces_the_real_0_9_0_file(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        feature = next(f for f in core.FEATURES if f.id == "box_dry")
+        self.assertEqual(feature.replaces[0][0], "plus4-grease-box-dry.cfg")
+        self.assertNotIn("PLUS4_BOX_DRY", feature.files[0][1].split("\n[", 1)[1])
 
     def test_klipper_failing_takes_the_new_file_away_too(self):
         with self.assertRaises(GreaseError):

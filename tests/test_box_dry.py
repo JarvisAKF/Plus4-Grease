@@ -7,6 +7,7 @@ template engine, and is skipped without it.
 """
 import ast
 import configparser
+import re
 import shlex
 import unittest
 
@@ -22,6 +23,20 @@ PLA_SILK, ASA, ABS, PA6_CF, PETG = 4, 18, 11, 25, 39
 
 class MacroError(Exception):
     pass
+
+
+# Klipper's own split of a G-code line (klippy/gcode.py): the command is the first run of letters and
+# underscores plus the number right after it, so a name with a digit in the middle is cut there.
+ARGS_R = re.compile("([A-Z_]+|[A-Z*])")
+
+
+def klipper_command(line):
+    parts = ARGS_R.split(line.upper())
+    if "".join(parts[:2]) == "N":
+        del parts[:2]
+    if len(parts) >= 3 and parts[1] != "N":
+        return parts[1] + parts[2].strip()
+    return ""
 
 
 class Status(dict):
@@ -64,7 +79,7 @@ class Printer(object):
         return status
 
     def state(self, box=1):
-        return self.macros["_PLUS4_BOX_DRY_{}".format(box)][1]
+        return self.macros["_GREASE_BOX_DRY_{}".format(box)][1]
 
     def target(self, box=1):
         return self.objects["heater_generic heater_box{}".format(box)]["target"]
@@ -80,7 +95,9 @@ class Printer(object):
 
     def run(self, line):
         words = shlex.split(line)
-        command, params = words[0].upper(), {}
+        command, params = klipper_command(line), {}
+        if command != words[0].upper():
+            raise AssertionError("Klipper reads {!r} as the command {!r}".format(line, command))
         for word in words[1:]:
             key, _, value = word.partition("=")
             params[key.upper()] = value
@@ -104,8 +121,8 @@ class Printer(object):
 
     def tick(self):
         """One minute: the delayed gcode runs if it was scheduled."""
-        if self.scheduled.pop("_PLUS4_BOX_DRY_TICK", 0) > 0:
-            self.script(self.render(self.delayed["_PLUS4_BOX_DRY_TICK"], {}))
+        if self.scheduled.pop("_GREASE_BOX_DRY_TICK", 0) > 0:
+            self.script(self.render(self.delayed["_GREASE_BOX_DRY_TICK"], {}))
             return True
         return False
 
@@ -116,8 +133,13 @@ class BoxDryTests(unittest.TestCase):
         self.assertEqual(feature.files, ((BOX_DRY_FILE, BOX_DRY_CFG),))
         self.assertEqual(feature.option, "box-dry")
         printer = Printer({1: ASA})
-        self.assertIn("PLUS4_BOX_DRY", printer.macros)
-        self.assertIn("_PLUS4_BOX_DRY_TICK", printer.delayed)
+        self.assertIn("GREASE_BOX_DRY", printer.macros)
+        self.assertIn("_GREASE_BOX_DRY_TICK", printer.delayed)
+
+    def test_klipper_reads_every_macro_name_whole(self):
+        for name in Printer({}).macros:
+            self.assertEqual(klipper_command(name + " BOX=1"), name)
+        self.assertEqual(klipper_command("PLUS4_BOX_DRY BOX=1"), "PLUS4")  # why 0.9.0's names never ran
 
     def test_limits_match_qidis_v2_1_1_filament_list(self):
         import os
@@ -134,12 +156,12 @@ class BoxDryTests(unittest.TestCase):
                     listed.setdefault(current, {})[key] = value
         expected = {fid: int(entry["box_max_temp"]) for fid, entry in listed.items()
                     if entry.get("filament") and entry.get("box_max_temp", "").isdigit()}
-        self.assertEqual(Printer({}).macros["_PLUS4_BOX_DRY_LIMITS"][1]["limits"], expected)
+        self.assertEqual(Printer({}).macros["_GREASE_BOX_DRY_LIMITS"][1]["limits"], expected)
 
     def test_pla_loaded_refuses_to_heat(self):
         printer = Printer({0: PLA_SILK, 1: ASA})
         with self.assertRaises(MacroError) as caught:
-            printer.run("PLUS4_BOX_DRY BOX=1")
+            printer.run("GREASE_BOX_DRY BOX=1")
         self.assertIn("can't be heated", str(caught.exception))
         self.assertEqual(printer.target(), 0)
         self.assertEqual(printer.state()["active"], 0)
@@ -147,22 +169,22 @@ class BoxDryTests(unittest.TestCase):
     def test_filament_saved_for_an_empty_slot_does_not_count(self):
         printer = Printer({1: ASA})
         printer.objects["save_variables"]["variables"]["filament_slot0"] = PLA_SILK
-        printer.run("PLUS4_BOX_DRY BOX=1")
+        printer.run("GREASE_BOX_DRY BOX=1")
         self.assertEqual(printer.target(), 45)
 
     def test_defaults_to_the_lowest_limit_of_the_loaded_filaments(self):
         printer = Printer({0: ABS, 2: PA6_CF})
-        printer.run("PLUS4_BOX_DRY BOX=1")
+        printer.run("GREASE_BOX_DRY BOX=1")
         self.assertEqual(printer.target(), 45)
         self.assertEqual(printer.state()["active"], 1)
         self.assertEqual(printer.state()["minutes_left"], 240)
-        self.assertEqual(printer.scheduled["_PLUS4_BOX_DRY_TICK"], 60)
+        self.assertEqual(printer.scheduled["_GREASE_BOX_DRY_TICK"], 60)
         self.assertIn("Box 1: drying at 45 C for 4 h", printer.messages[-1])
 
     def test_temperature_above_the_limit_is_refused(self):
         printer = Printer({1: ASA})
         with self.assertRaises(MacroError) as caught:
-            printer.run("PLUS4_BOX_DRY BOX=1 TEMP=50")
+            printer.run("GREASE_BOX_DRY BOX=1 TEMP=50")
         self.assertIn("1 to 45 C", str(caught.exception))
         self.assertEqual(printer.target(), 0)
 
@@ -170,16 +192,16 @@ class BoxDryTests(unittest.TestCase):
         for fid in (0, 99):
             printer = Printer({1: fid})
             with self.assertRaises(MacroError) as caught:
-                printer.run("PLUS4_BOX_DRY BOX=1")
+                printer.run("GREASE_BOX_DRY BOX=1")
             self.assertIn("slot 1B", str(caught.exception))
 
     def test_a_box_that_is_not_there_is_refused(self):
         with self.assertRaises(MacroError):
-            Printer({1: ASA}).run("PLUS4_BOX_DRY BOX=2")
+            Printer({1: ASA}).run("GREASE_BOX_DRY BOX=2")
 
     def test_timer_runs_out_and_turns_the_heater_off(self):
         printer = Printer({1: ASA})
-        printer.run("PLUS4_BOX_DRY BOX=1 TEMP=40 HOURS=0.05")
+        printer.run("GREASE_BOX_DRY BOX=1 TEMP=40 HOURS=0.05")
         self.assertEqual(printer.state()["minutes_left"], 3)
         self.assertTrue(printer.tick())
         self.assertTrue(printer.tick())
@@ -192,11 +214,11 @@ class BoxDryTests(unittest.TestCase):
 
     def test_hours_zero_runs_until_stopped(self):
         printer = Printer({1: ASA})
-        printer.run("PLUS4_BOX_DRY BOX=1 HOURS=0")
+        printer.run("GREASE_BOX_DRY BOX=1 HOURS=0")
         for _ in range(300):
             self.assertTrue(printer.tick())
         self.assertEqual(printer.target(), 45)
-        printer.run("PLUS4_BOX_DRY_STOP BOX=1")
+        printer.run("GREASE_BOX_DRY_STOP BOX=1")
         self.assertEqual(printer.target(), 0)
         self.assertEqual(printer.state()["active"], 0)
         printer.tick()  # the minute already scheduled still runs, finds nothing to do and stops
@@ -205,7 +227,7 @@ class BoxDryTests(unittest.TestCase):
 
     def test_humidity_switches_the_heater_off_and_on(self):
         printer = Printer({1: ASA}, humidity=40)
-        printer.run("PLUS4_BOX_DRY BOX=1 HOURS=0 HUMIDITY=20")
+        printer.run("GREASE_BOX_DRY BOX=1 HOURS=0 HUMIDITY=20")
         self.assertEqual(printer.target(), 45)
         printer.humidity(20)
         printer.tick()
@@ -222,14 +244,14 @@ class BoxDryTests(unittest.TestCase):
 
     def test_already_dry_starts_with_the_heater_off(self):
         printer = Printer({1: ASA}, humidity=15)
-        printer.run("PLUS4_BOX_DRY BOX=1 HUMIDITY=20")
+        printer.run("GREASE_BOX_DRY BOX=1 HUMIDITY=20")
         self.assertEqual(printer.target(), 0)
         self.assertEqual(printer.state()["active"], 1)
         self.assertTrue(printer.tick())
 
     def test_heater_changed_elsewhere_ends_drying_and_leaves_it_alone(self):
         printer = Printer({1: ASA})
-        printer.run("PLUS4_BOX_DRY BOX=1")
+        printer.run("GREASE_BOX_DRY BOX=1")
         printer.objects["heater_generic heater_box1"]["target"] = 30.0
         printer.tick()
         self.assertEqual(printer.state()["active"], 0)
@@ -238,8 +260,8 @@ class BoxDryTests(unittest.TestCase):
         self.assertFalse(printer.tick())
 
     def test_bad_hours_and_humidity_are_refused(self):
-        for line in ("PLUS4_BOX_DRY BOX=1 HOURS=-1", "PLUS4_BOX_DRY BOX=1 HOURS=49",
-                     "PLUS4_BOX_DRY BOX=1 HUMIDITY=95"):
+        for line in ("GREASE_BOX_DRY BOX=1 HOURS=-1", "GREASE_BOX_DRY BOX=1 HOURS=49",
+                     "GREASE_BOX_DRY BOX=1 HUMIDITY=95"):
             with self.assertRaises(MacroError):
                 Printer({1: ASA}).run(line)
 

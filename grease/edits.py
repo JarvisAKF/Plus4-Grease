@@ -18,8 +18,10 @@ Edit = collections.namedtuple("Edit", "file find replace")
 # --replace-own-speeds). None for features that only make their exact text edits.
 # files: ((name, text), ...) a feature creates in the config folder and uninstall removes.
 # option: the install switch (--board-fan) that turns on a change left off by default.
-Feature = collections.namedtuple("Feature", "id title detail source edits setting files option",
-                                 defaults=(None, None, None))
+# replaces: ((name, sha256), ...) of files an earlier Plus4 Grease version wrote for this change, which
+# install updates and uninstall removes as its own.
+Feature = collections.namedtuple("Feature", "id title detail source edits setting files option replaces",
+                                 defaults=(None, None, None, None))
 Setting = collections.namedtuple("Setting", "file section option value")
 
 PROBE_MOVE_SPEED = 300
@@ -301,7 +303,7 @@ FEATURES = (
         id="box_dry",
         title="Box drying with a timer and humidity control (install --box-dry)",
         detail=(
-            "Adds PLUS4_BOX_DRY BOX=1 TEMP=45 HOURS=4 HUMIDITY=20 and PLUS4_BOX_DRY_STOP BOX=1, which the new "
+            "Adds GREASE_BOX_DRY BOX=1 TEMP=45 HOURS=4 HUMIDITY=20 and GREASE_BOX_DRY_STOP BOX=1, which the new "
             "Fluidd's Box card uses. Drying is the Box heater at a temperature, as QIDI's touchscreen does it "
             "(SET_HEATER_TEMPERATURE HEATER=heater_boxN), with a timer kept by Klipper and, if HUMIDITY is "
             "given, the heater switched off at or below that humidity and back on 5 points above it. It never "
@@ -326,5 +328,7 @@ FEATURES = (
         ),
         files=((BOX_DRY_FILE, BOX_DRY_CFG),),
         option="box-dry",
+        # 0.9.0's file, whose PLUS4_BOX_DRY macros Klipper couldn't call (it reads that name as PLUS4).
+        replaces=((BOX_DRY_FILE, "2f30602eb7986401a4943e2c86c7dbf3a908330b35eb1ad64a12865870978f5e"),),
     ),
 )

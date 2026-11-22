@@ -25,7 +25,7 @@ def main(argv=None):
                      help="also make the chamber heater follow an average of the toolhead chip and the chamber "
                           "thermistor (max_power 0.6, max_temp 80, no 45-65 C target range or bed assist)")
     run.add_argument("--box-dry", action="store_true",
-                     help="also add Box drying with a timer and humidity control (PLUS4_BOX_DRY), used by the "
+                     help="also add Box drying with a timer and humidity control (GREASE_BOX_DRY), used by the "
                           "new Fluidd's Box card")
     run.add_argument("--any-firmware", action="store_true", help=argparse.SUPPRESS)
     sub.add_parser("uninstall", help="put QIDI's stock text back")

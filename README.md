@@ -77,9 +77,9 @@ QIDI's web page is Fluidd v1.30.4 with QIDI's Box panel added. `fluidd install` 
 - **Settings:** it keeps its own (Moonraker namespace `plus4_grease_fluidd`), so the two pages never overwrite each other's layout. The first install copies QIDI Fluidd's settings across, so your theme, macros and layout carry over.
 - **Cameras** are passed through to QIDI's page, so the new one uses the same camera setup.
 
-**Install.** Get `plus4-grease-fluidd-v1.38.1-6.zip` onto the printer next to `install.sh` or in your home folder. It's attached to the release, or build it with `tools/build_fluidd.sh` on a computer. From your computer (PowerShell, in the folder with the zip):
+**Install.** Get `plus4-grease-fluidd-v1.38.1-7.zip` onto the printer next to `install.sh` or in your home folder. It's attached to the release, or build it with `tools/build_fluidd.sh` on a computer. From your computer (PowerShell, in the folder with the zip):
 ```
-scp plus4-grease-fluidd-v1.38.1-6.zip mks@<printer-ip>:~/
+scp plus4-grease-fluidd-v1.38.1-7.zip mks@<printer-ip>:~/
 ```
 Then on the printer:
 ```
@@ -90,7 +90,7 @@ It checks the zip's SHA-256, unpacks it to `~/plus4-grease-fluidd`, adds the ngi
 
 **Remove:** `bash ~/plus4-grease/install.sh fluidd remove` deletes the site and the folder and reloads nginx. Its settings stay in Moonraker's database, so a reinstall picks them up.
 
-**`--box-dry`: Box drying with a timer and humidity control.** QIDI's touchscreen dries the Box by setting the Box heater (`SET_HEATER_TEMPERATURE HEATER=heater_box1 TARGET=45`) and keeps the timer on the screen. This adds two macros that keep it in Klipper instead, which the new Fluidd's Box card uses: `PLUS4_BOX_DRY BOX=1 TEMP=45 HOURS=4 HUMIDITY=20` and `PLUS4_BOX_DRY_STOP BOX=1`. HOURS 0 runs until stopped. With HUMIDITY, the heater goes off once the Box reads at or below it and back on 5 points above it, until the time runs out. It never heats above QIDI's Box limit for the filaments loaded in that Box (from QIDI's filament list: 0 for PLA and TPU, which refuses to heat; 45 °C for PETG, ABS and ASA; up to 65 °C for nylons and other carbon-fiber blends), refuses a loaded filament that isn't in QIDI's list, and stops if the Box heater is changed elsewhere, from the touchscreen say. A Klipper restart ends it with the heater off.
+**`--box-dry`: Box drying with a timer and humidity control.** QIDI's touchscreen dries the Box by setting the Box heater (`SET_HEATER_TEMPERATURE HEATER=heater_box1 TARGET=45`) and keeps the timer on the screen. This adds two macros that keep it in Klipper instead, which the new Fluidd's Box card uses: `GREASE_BOX_DRY BOX=1 TEMP=45 HOURS=4 HUMIDITY=20` and `GREASE_BOX_DRY_STOP BOX=1`. HOURS 0 runs until stopped. With HUMIDITY, the heater goes off once the Box reads at or below it and back on 5 points above it, until the time runs out. It never heats above QIDI's Box limit for the filaments loaded in that Box (from QIDI's filament list: 0 for PLA and TPU, which refuses to heat; 45 °C for PETG, ABS and ASA; up to 65 °C for nylons and other carbon-fiber blends), refuses a loaded filament that isn't in QIDI's list, and stops if the Box heater is changed elsewhere, from the touchscreen say. A Klipper restart ends it with the heater off.
 
 ## How it stays safe
 
