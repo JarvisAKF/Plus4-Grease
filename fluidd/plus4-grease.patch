@@ -1,9 +1,9 @@
 diff --git a/src/components/widgets/qidiBox/QidiBoxCard.vue b/src/components/widgets/qidiBox/QidiBoxCard.vue
 new file mode 100644
-index 0000000..8d31c5b
+index 0000000..6f5727d
 --- /dev/null
 +++ b/src/components/widgets/qidiBox/QidiBoxCard.vue
-@@ -0,0 +1,586 @@
+@@ -0,0 +1,637 @@
 +<template>
 +  <collapsable-card
 +    :title="$t('app.qidi_box.title.qidi_box')"
@@ -63,8 +63,23 @@ index 0000000..8d31c5b
 +          {{ problem }}
 +        </div>
 +        <div class="text-caption mt-1">
-+          {{ $t('app.qidi_box.msg.flow_failed_read_only') }}
++          {{ $t('app.qidi_box.msg.plus4_retry_help') }}
 +        </div>
++        <app-btn
++          small
++          color="primary"
++          class="mt-2"
++          :disabled="retryDisabled"
++          @click="retry"
++        >
++          <v-icon
++            small
++            left
++          >
++            $refresh
++          </v-icon>
++          {{ $t('app.qidi_box.btn.retry') }}
++        </app-btn>
 +      </v-alert>
 +
 +      <v-alert
@@ -81,6 +96,23 @@ index 0000000..8d31c5b
 +        >
 +          {{ problem }}
 +        </div>
++        <div class="text-caption mt-1">
++          {{ $t('app.qidi_box.msg.plus4_retry_help') }}
++        </div>
++        <app-btn
++          small
++          class="mt-2"
++          :disabled="retryDisabled"
++          @click="retry"
++        >
++          <v-icon
++            small
++            left
++          >
++            $refresh
++          </v-icon>
++          {{ $t('app.qidi_box.btn.retry') }}
++        </app-btn>
 +      </v-alert>
 +
 +      <div class="mt-3 pa-3 rounded-lg qidi-box-card__sheet">
@@ -224,16 +256,17 @@ index 0000000..8d31c5b
 +      </div>
 +
 +      <div
-+        v-if="canDry"
++        v-if="canDry || qidiDryingBoxes.length"
 +        class="mt-3 pa-3 rounded-lg qidi-box-card__sheet"
 +      >
 +        <qidi-box-dry
-+          v-for="box in boxes"
++          v-for="box in (canDry ? boxes : qidiDryingBoxes)"
 +          :key="`dry:${box}`"
 +          :class="{ 'mt-4': box > 1 }"
 +          :box="box"
 +          :box-count="boxCount"
 +          :limit="heaterLimit(box)"
++          :can-dry="canDry"
 +        />
 +      </div>
 +    </div>
@@ -457,6 +490,24 @@ index 0000000..8d31c5b
 +    return 'GREASE_BOX_DRY' in this.$typedGetters['printer/getAvailableCommands']
 +  }
 +
++  // Boxes QIDI's own ENABLE_BOX_DRY (the touchscreen's drying) is running on.
++  get qidiDryingBoxes (): number[] {
++    const boxes = this.$typedState.printer.printer.box_extras?.boxes ?? []
++
++    return this.boxes.filter(box => Number(boxes[box - 1]?.dry_state ?? 0) !== 0)
++  }
++
++  // TRY_MOVE_AGAIN, as the touchscreen's Retry after a Box error.
++  get retryDisabled (): boolean {
++    return !this.klippyReady || this.hasWait(Waits.onQidiBoxCommand)
++  }
++
++  retry () {
++    if (this.retryDisabled) return
++
++    this.sendGcode('TRY_MOVE_AGAIN', Waits.onQidiBoxCommand)
++  }
++
 +  heaterLimit (box: number): number | null {
 +    return this.$typedGetters['qidiBox/getHeaterLimit'](box)
 +  }
@@ -592,10 +643,10 @@ index 0000000..8d31c5b
 +</style>
 diff --git a/src/components/widgets/qidiBox/QidiBoxDry.vue b/src/components/widgets/qidiBox/QidiBoxDry.vue
 new file mode 100644
-index 0000000..988032b
+index 0000000..ed126a5
 --- /dev/null
 +++ b/src/components/widgets/qidiBox/QidiBoxDry.vue
-@@ -0,0 +1,205 @@
+@@ -0,0 +1,249 @@
 +<template>
 +  <div class="qidi-box-dry">
 +    <div class="d-flex align-center text-overline text--secondary">
@@ -608,7 +659,28 @@ index 0000000..988032b
 +      {{ boxCount > 1 ? $t('app.qidi_box.dry.title_box', { box }) : $t('app.qidi_box.dry.title') }}
 +    </div>
 +
-+    <template v-if="active">
++    <template v-if="qidiDrying && !active">
++      <div class="text-body-2">
++        {{ $t('app.qidi_box.dry.qidi_running', { temp: qidiTemp }) }}
++      </div>
++      <div class="mt-2">
++        <app-btn
++          small
++          :disabled="!klippyReady || hasWait(waitKey)"
++          @click="stopQidi"
++        >
++          <v-icon
++            small
++            left
++          >
++            $stop
++          </v-icon>
++          {{ $t('app.qidi_box.dry.stop') }}
++        </app-btn>
++      </div>
++    </template>
++
++    <template v-else-if="active">
 +      <div class="text-body-2">
 +        {{ statusText }}
 +      </div>
@@ -628,6 +700,8 @@ index 0000000..988032b
 +        </app-btn>
 +      </div>
 +    </template>
++
++    <template v-else-if="!canDry" />
 +
 +    <div
 +      v-else-if="limit === 0"
@@ -692,7 +766,7 @@ index 0000000..988032b
 +    </v-form>
 +
 +    <div
-+      v-if="!active && limit !== 0"
++      v-if="canDry && !active && !qidiDrying && limit !== 0"
 +      class="text-caption text--disabled mt-1"
 +    >
 +      {{ $t('app.qidi_box.dry.help', { max: maxTemp }) }}
@@ -726,6 +800,10 @@ index 0000000..988032b
 +  @Prop({ type: Number, required: true })
 +  readonly boxCount!: number
 +
++  // Plus4 Grease's --box-dry macros are installed.
++  @Prop({ type: Boolean, default: true })
++  readonly canDry!: boolean
++
 +  // QIDI's Box heater limit for the filaments loaded; null when unknown.
 +  @Prop({ type: Number, default: null })
 +  readonly limit!: number | null
@@ -749,6 +827,19 @@ index 0000000..988032b
 +
 +  get active (): boolean {
 +    return Number(this.state.active) === 1
++  }
++
++  // QIDI's own drying (ENABLE_BOX_DRY, as the touchscreen starts it): box_extras.boxes[].dry_state.
++  get qidiBox (): Record<string, any> {
++    return this.$typedState.printer.printer.box_extras?.boxes?.[this.box - 1] ?? {}
++  }
++
++  get qidiDrying (): boolean {
++    return Number(this.qidiBox.dry_state ?? 0) !== 0
++  }
++
++  get qidiTemp (): number {
++    return Math.round(Number(this.qidiBox.box_target_temp ?? this.$typedState.printer.printer[`heater_generic heater_box${this.box}`]?.target ?? 0))
 +  }
 +
 +  get humidityNow (): number | null {
@@ -779,12 +870,16 @@ index 0000000..988032b
 +  }
 +
 +  start () {
-+    if (!this.valid || this.active) return
++    if (!this.valid || this.active || this.qidiDrying) return
 +
 +    this.sendGcode(
 +      `GREASE_BOX_DRY BOX=${this.box} TEMP=${Math.round(this.temp)} HOURS=${this.hours} HUMIDITY=${Math.round(this.humidity)}`,
 +      this.waitKey
 +    )
++  }
++
++  stopQidi () {
++    this.sendGcode(`DISABLE_BOX_DRY BOX=${this.box}`, this.waitKey)
 +  }
 +
 +  stop () {
@@ -1723,10 +1818,10 @@ index 0000000..a3aec82
 +</style>
 diff --git a/src/components/widgets/qidiBox/QidiBoxSettingsDialog.vue b/src/components/widgets/qidiBox/QidiBoxSettingsDialog.vue
 new file mode 100644
-index 0000000..2638d14
+index 0000000..8674381
 --- /dev/null
 +++ b/src/components/widgets/qidiBox/QidiBoxSettingsDialog.vue
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,83 @@
 +<template>
 +  <app-dialog
 +    v-model="open"
@@ -1754,6 +1849,19 @@ index 0000000..2638d14
 +          />
 +        </app-setting>
 +      </template>
++      <v-divider />
++      <app-setting
++        :title="$t('app.qidi_box.self_check.title')"
++        :sub-title="$t('app.qidi_box.self_check.help')"
++      >
++        <app-btn
++          small
++          :disabled="selfCheckDisabled"
++          @click="selfCheck"
++        >
++          {{ $t('app.qidi_box.self_check.run') }}
++        </app-btn>
++      </app-setting>
 +    </v-card-text>
 +  </app-dialog>
 +</template>
@@ -1761,8 +1869,10 @@ index 0000000..2638d14
 +<script lang="ts">
 +// Plus4 Grease: QIDI's three Box settings, from Valve Oil's Fluidd. They're saved variables QIDI's Box modules read,
 +// set exactly as QIDI's own Fluidd sets them on the Plus 4's V2.1.1: SAVE_VARIABLE VARIABLE=<name> VALUE="1" or "0".
++// The self-check sends BOX_SELF_INSPECTION, as QIDI's touchscreen does.
 +import { Component, Mixins, VModel } from 'vue-property-decorator'
 +import StateMixin from '@/mixins/state'
++import { Waits } from '@/globals'
 +
 +const VARIABLES = ['auto_read_rfid', 'auto_init_detect', 'auto_reload_detect']
 +
@@ -1775,6 +1885,19 @@ index 0000000..2638d14
 +    const variables = this.$typedState.printer.printer.save_variables?.variables ?? {}
 +
 +    return VARIABLES.map(variable => ({ variable, value: Number(variables[variable] ?? 0) === 1 }))
++  }
++
++  get selfCheckDisabled (): boolean {
++    const state: string = this.$typedState.printer.printer.print_stats?.state ?? ''
++
++    return !this.klippyReady || this.$typedGetters['qidiBox/getBusy'] || this.hasWait(Waits.onQidiBoxCommand) ||
++      state === 'printing' || state === 'paused'
++  }
++
++  selfCheck () {
++    if (this.selfCheckDisabled) return
++
++    this.sendGcode('BOX_SELF_INSPECTION', Waits.onQidiBoxCommand)
 +  }
 +
 +  save (variable: string, value: boolean) {
@@ -2358,10 +2481,10 @@ index ed39791..d4b391b 100644
  
  export const SupportedLocales = Object.freeze([
 diff --git a/src/locales/en.yaml b/src/locales/en.yaml
-index 217e550..479b5d2 100644
+index 217e550..e6f18fa 100644
 --- a/src/locales/en.yaml
 +++ b/src/locales/en.yaml
-@@ -1456,6 +1456,239 @@ app:
+@@ -1456,6 +1456,245 @@ app:
        show_logos: Show Logos
        show_climate: Show Climate Info
        show_unavailable_spool_color: Show Unavailable Spools
@@ -2464,6 +2587,7 @@ index 217e550..479b5d2 100644
 +      flow_failed_read_only: Retry or stop it on the touchscreen or on QIDI's page (port 80).
 +      plus4_commands: Load, Unload, Eject, Read RFID, Edit filament and Box settings send the same commands as QIDI's own page. Drying is on the touchscreen; Plus4 Grease's install --box-dry adds it here.
 +      plus4_commands_dry: Load, Unload, Eject, Read RFID, Edit filament and Box settings send the same commands as QIDI's own page. Drying uses Plus4 Grease's GREASE_BOX_DRY, which keeps its timer on the printer.
++      plus4_retry_help: Retry runs the failed Box step again, as the touchscreen's Retry does.
 +      plus4_heater_limit: Box {box} heater up to {temp}°C, the lowest Box limit of the filaments loaded in it.
 +      plus4_heater_locked: Box {box} heater locked at 0°C. A filament loaded in it can't be heated in the Box (QIDI's limit; PLA and TPU are 0).
 +      loaded: Loaded %{slot}
@@ -2538,6 +2662,10 @@ index 217e550..479b5d2 100644
 +      unverified: >-
 +        Tag not written. It didn't read back as written; it may have moved away
 +        mid-write. Try again.
++    self_check:
++      title: Box self-check
++      help: Runs QIDI's Box self-check, as at startup. The Box checks each slot. Not while printing or while the Box is busy.
++      run: Run
 +    settings:
 +      auto_init_detect: Detection on startup
 +      auto_init_detect_help: >-
@@ -2557,6 +2685,7 @@ index 217e550..479b5d2 100644
 +        While the Box heater is on, including during a print, each empty slot
 +        turns its spool every 5 minutes. Slots with filament fed never turn.
 +    dry:
++      qidi_running: "Drying from the touchscreen at {temp}°C (QIDI's timer)"
 +      help: "Up to {max}°C for the filaments loaded. Hours 0 runs until stopped. Humidity 0 is off; otherwise the heater goes off at or below it and back on 5 points above it."
 +      hours: Hours
 +      hours_hint: 0 runs until stopped

@@ -4,7 +4,7 @@
 
 ## plus4-grease.patch
 
-A QIDI Box card on the dashboard (`box-card`, the ID QIDI's own Fluidd uses, so a layout copied from QIDI's page keeps its place). It shows each slot's filament, color and RFID state, the Box's humidity and temperature, which slot is loaded, the hub and toolhead sensors, tool mapping, auto-reload groups, a running Box step, and a failed step with QIDI's error. Its Load, Unload, Eject and Read RFID buttons send what QIDI's own Fluidd sends on V2.1.1 (`E_LOAD slot=N`, `E_UNLOAD slot=N`, `E_BOX slot=N`, `RFID_READ SLOT=slotN`). It's hidden when no Box is connected.
+A QIDI Box card on the dashboard (`box-card`, the ID QIDI's own Fluidd uses, so a layout copied from QIDI's page keeps its place). It shows each slot's filament, color and RFID state, the Box's humidity and temperature, which slot is loaded, the hub and toolhead sensors, tool mapping, auto-reload groups, a running Box step, and a failed step with QIDI's error, with Retry (`TRY_MOVE_AGAIN`); Box settings has a self-check (`BOX_SELF_INSPECTION`), and drying started on the touchscreen shows with a Stop (`DISABLE_BOX_DRY`). Its Load, Unload, Eject and Read RFID buttons send what QIDI's own Fluidd sends on V2.1.1 (`E_LOAD slot=N`, `E_UNLOAD slot=N`, `E_BOX slot=N`, `RFID_READ SLOT=slotN`). It's hidden when no Box is connected.
 
 It's ported from Valve Oil's Fluidd (https://github.com/thelegendtubaguy/fluidd, commit `bb36dde`, GPL v3), written for QIDI's newer printers. The Plus 4's Box publishes the same objects on QIDI firmware V2.1.1 (`box_extras`, `multi_color_controller`, `box_stepper slotN`, `aht20_f heater_boxN`, `save_variables`), so the parsing is used as it is:
 

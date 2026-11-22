@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.0
+- Box card (Fluidd build 9), with commands QIDI's touchscreen uses on V2.1.1, from qbdisplay's notes:
+  - **Retry** under a failed Box step or a Box warning sends `TRY_MOVE_AGAIN`, as the touchscreen's Retry after a Box error does.
+  - **Box self-check** in Box settings sends `BOX_SELF_INSPECTION`; off while printing, while paused, or while the Box is busy.
+  - Drying started on the touchscreen (QIDI's `ENABLE_BOX_DRY`, read from `box_extras.boxes[].dry_state`) shows on the card with its temperature and a **Stop** that sends `DISABLE_BOX_DRY BOX=N`, with or without `--box-dry`. Its time left isn't shown: QIDI's end time is in Klipper's clock, which the page doesn't have.
+
 ## 0.10.0
 - Corrected: QIDI's touchscreen dries the Box with QIDI's own `ENABLE_BOX_DRY BOX=1 TEMP=<°C> END_TIME=<hours>` / `DISABLE_BOX_DRY BOX=1` (a timer kept by QIDI's Box module, no humidity control), not by setting the heater directly as 0.9.0's notes said. `GREASE_BOX_DRY` is unchanged. Found in qbdisplay's notes and confirmed in QIDI's `box_extras.so`.
 - The new Fluidd's Box card has **Edit filament** (the pencil beside a slot's label; Fluidd build 8): pick the slot's vendor, filament and color from QIDI's filament list for any spool, with or without an RFID tag. It saves them as QIDI's own page and touchscreen do on V2.1.1: `SAVE_VARIABLE VARIABLE=vendor_slotN VALUE="<ID>"`, then `filament_slotN` and `color_slotN`, slot 16 being the external spool. Off while the Box or a print is busy and for an empty Box slot. From Valve Oil's Fluidd.
