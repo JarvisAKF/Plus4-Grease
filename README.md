@@ -77,7 +77,7 @@ QIDI's web page is Fluidd v1.30.4 with QIDI's Box panel added. `fluidd install` 
 - **Settings:** it keeps its own (Moonraker namespace `plus4_grease_fluidd`), so the two pages never overwrite each other's layout. The first install copies QIDI Fluidd's settings across, so your theme, macros and layout carry over.
 - **Cameras** are passed through to QIDI's page, so the new one uses the same camera setup.
 
-**Install.** Get `plus4-grease-fluidd-v1.38.1-9.zip` onto the printer next to `install.sh` or in your home folder. It's attached to the release, or build it with `tools/build_fluidd.sh` on a computer. From your computer (PowerShell, in the folder with the zip):
+**Install.** Get `plus4-grease-fluidd-v1.38.1-9.zip` onto the printer next to `install.sh` or in your home folder. It's attached to the [latest release](https://github.com/JarvisAKF/Plus4-Grease/releases/latest), or build it with `tools/build_fluidd.sh` on a computer. From your computer (PowerShell, in the folder with the zip):
 ```
 scp plus4-grease-fluidd-v1.38.1-9.zip mks@<printer-ip>:~/
 ```
@@ -111,7 +111,7 @@ You need SSH access to the printer as `mks`. QIDI's default password is `makerba
   ```
   git clone https://github.com/JarvisAKF/Plus4-Grease ~/plus4-grease
   ```
-- Or from your computer, with this repository downloaded (in PowerShell on Windows):
+- Or from your computer: download the source zip from the [latest release](https://github.com/JarvisAKF/Plus4-Grease/releases/latest), unpack it, rename the folder to `plus4-grease`, and copy it over (in PowerShell on Windows, from the folder that holds it):
   ```
   scp -r plus4-grease mks@<printer-ip>:~/
   ```
@@ -150,6 +150,18 @@ All three only read; none changes a file.
 - **Config comparison.** `python3 ~/plus4-grease/tools/config_diff.py` compares your `printer.cfg`, `gcode_macro.cfg`, Box files and `moonraker.conf` with QIDI's stock V2.1.1 copies in `stock/plus4-2.1.1/`, section by section: what you added, removed and changed, macro bodies as a line diff, and the SAVE_CONFIG block. Plus4 Grease's own edits are taken out first. Serial numbers are hidden. The result is also saved to `~/plus4-grease-config-diff-<date>.txt`.
 
 What's known about the Plus 4's software and boards is in [docs/plus4-notes.md](docs/plus4-notes.md). `tools/collect_plus4.py` gathers the same information from a printer, read-only, with serial numbers removed.
+
+## Help test on a stock Plus 4
+
+Everything here has run on one Plus 4 so far, with a Beacon probe conversion; [docs/testing.md](docs/testing.md) says what was tested where. If you have a stock Plus 4 on QIDI's V2.1.1, these help most, in this order, and none of them changes anything:
+
+```
+bash ~/plus4-grease/install.sh install --dry-run
+python3 ~/plus4-grease/tools/config_diff.py
+python3 ~/plus4-grease/tools/klipper_report.py
+```
+
+Then, if you're happy to, `install`, a print, and `klipper_report.py` again. Open an issue with the output. The tools leave out serial numbers and passwords, but read what you paste first.
 
 ## What's next
 

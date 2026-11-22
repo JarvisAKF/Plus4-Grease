@@ -259,6 +259,25 @@ class BoxDryTests(unittest.TestCase):
         self.assertIn("changed elsewhere", printer.messages[-1])
         self.assertFalse(printer.tick())
 
+    def test_each_of_four_boxes_dries_on_its_own(self):
+        # Box 1 has PLA (locked); Boxes 2 to 4 have ASA, ABS + PA6-CF, and nothing.
+        printer = Printer({0: PLA_SILK, 4: ASA, 8: ABS, 9: PA6_CF}, box_count=4)
+        with self.assertRaises(MacroError):
+            printer.run("GREASE_BOX_DRY BOX=1")
+        printer.run("GREASE_BOX_DRY BOX=2 HOURS=1")
+        printer.run("GREASE_BOX_DRY BOX=3 HOURS=0 HUMIDITY=20")
+        printer.run("GREASE_BOX_DRY BOX=4 HOURS=0")
+        self.assertEqual([printer.target(box) for box in (1, 2, 3, 4)], [0, 45, 45, 65])
+        printer.humidity(15, box=3)
+        printer.tick()
+        self.assertEqual([printer.target(box) for box in (1, 2, 3, 4)], [0, 45, 0, 65])
+        printer.run("GREASE_BOX_DRY_STOP BOX=4")
+        self.assertEqual([printer.state(box)["active"] for box in (1, 2, 3, 4)], [0, 1, 1, 0])
+        for _ in range(60):
+            printer.tick()
+        self.assertEqual(printer.state(2)["active"], 0)
+        self.assertEqual(printer.state(3)["active"], 1)
+
     def test_bad_hours_and_humidity_are_refused(self):
         for line in ("GREASE_BOX_DRY BOX=1 HOURS=-1", "GREASE_BOX_DRY BOX=1 HOURS=49",
                      "GREASE_BOX_DRY BOX=1 HUMIDITY=95"):

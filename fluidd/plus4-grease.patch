@@ -3265,6 +3265,74 @@ index 0000000..87ee604
 +    expect(qidiColorNearBackground(color, dark)).toBe(expected)
 +  })
 +})
+diff --git a/src/util/__tests__/qidi-box-plus4-boxes.spec.ts b/src/util/__tests__/qidi-box-plus4-boxes.spec.ts
+new file mode 100644
+index 0000000..0dc0f77
+--- /dev/null
++++ b/src/util/__tests__/qidi-box-plus4-boxes.spec.ts
+@@ -0,0 +1,62 @@
++import { describe, expect, it } from 'vitest'
++import { parseQidiFilamentList, QIDI_BOX_EXTERNAL_SLOT, qidiBoxSlots } from '../qidi-box'
++import { qidiBoxFlowLayout } from '../qidi-box-flow'
++
++// Plus4 Grease: the Plus 4 takes up to four Boxes. QIDI's box_extras always lists four, the unconnected ones
++// offline; save_variables.box_count says how many there are.
++describe('Plus 4 with more than one Box', () => {
++  const list = parseQidiFilamentList(['[fila18]', 'filament = ASA', 'box_max_temp = 45', 'type = ASA', ''].join('\n'))
++
++  const printer = (count: number) => {
++    const status: Record<string, any> = {
++      save_variables: { variables: { box_count: count } },
++      box_extras: {
++        boxes: Array.from({ length: 4 }, (_, box) => ({
++          is_online: box < count ? 1 : 0,
++          filament_info: Array.from({ length: 4 }, (_, i) => ({
++            index: i, filament_id: 'QF', filament_str: 'ASA', filament_type: 'ASA', vendor_str: 'QIDI', color_rgb_str: 'FE717A'
++          }))
++        }))
++      }
++    }
++
++    for (let slot = 0; slot < count * 4; slot++) status[`box_stepper slot${slot}`] = { runout_button: 0 }
++
++    return status
++  }
++
++  it('lists four slots for each Box, up to four Boxes, then the external spool', () => {
++    for (const count of [1, 2, 3, 4]) {
++      const slots = qidiBoxSlots(printer(count), list)
++
++      expect(slots.map(slot => slot.index)).toEqual([...Array.from({ length: count * 4 }, (_, i) => i), QIDI_BOX_EXTERNAL_SLOT])
++      expect(slots.filter(slot => slot.index !== QIDI_BOX_EXTERNAL_SLOT).every(slot => slot.present)).toBe(true)
++    }
++  })
++
++  it('labels the slots of Box 4 as 4A to 4D', () => {
++    const labels = qidiBoxSlots(printer(4), list).map(slot => slot.label)
++
++    expect(labels.slice(12, 16)).toEqual(['4A', '4B', '4C', '4D'])
++  })
++
++  it('never shows more than four Boxes', () => {
++    expect(qidiBoxSlots(printer(4), list).length).toBe(17)
++    const tooMany = printer(4)
++
++    tooMany.save_variables.variables.box_count = 6
++    expect(qidiBoxSlots(tooMany, list).length).toBe(17)
++  })
++
++  it('lays out one to four Boxes at narrow and wide widths', () => {
++    for (const count of [1, 2, 3, 4]) {
++      for (const width of [360, 600, 1200]) {
++        const layout = qidiBoxFlowLayout(width, count)
++        const shown = [...layout.top, ...layout.bottom].sort((a, b) => a - b)
++
++        // every Box once, and the external spool (0) once
++        expect(shown).toEqual([0, ...Array.from({ length: count }, (_, i) => i + 1)])
++      }
++    }
++  })
++})
 diff --git a/src/util/__tests__/qidi-box-plus4-limits.spec.ts b/src/util/__tests__/qidi-box-plus4-limits.spec.ts
 new file mode 100644
 index 0000000..ce5b06d

@@ -1,6 +1,7 @@
 # Changelog
 
 ## 0.11.0
+- Up to four Boxes: the Box card's slots, layout, climate, heater limits and drying, and the drying macros, each tested with one to four Boxes.
 - Box card (Fluidd build 9), with commands QIDI's touchscreen uses on V2.1.1, from qbdisplay's notes:
   - **Retry** under a failed Box step or a Box warning sends `TRY_MOVE_AGAIN`, as the touchscreen's Retry after a Box error does.
   - **Box self-check** in Box settings sends `BOX_SELF_INSPECTION`; off while printing, while paused, or while the Box is busy.
