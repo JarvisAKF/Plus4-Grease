@@ -16,7 +16,7 @@ If you want it, it also adds a current Fluidd on its own port next to QIDI's, wh
 
 It also brings read-only tools for finding out what a Plus 4 is doing: a speed test, a Klipper report that explains shutdowns like "Timer too close" and "Lost communication", and a comparison of your config with QIDI's stock one.
 
-The ideas come from [Valve Oil](https://github.com/thelegendtubaguy/valve-oil), which does this for QIDI's Max 4, Plus 5 and Smart 5. Plus4 Grease is a separate project, written for the Plus 4's older software: Klipper on Python 3.7, Debian 10, and the `mks` user. This is version 0.8.
+The ideas come from [Valve Oil](https://github.com/thelegendtubaguy/valve-oil), which does this for QIDI's Max 4, Plus 5 and Smart 5. Plus4 Grease is a separate project, written for the Plus 4's older software: Klipper on Python 3.7, Debian 10, and the `mks` user. This is version 0.9.
 
 ## Plus4 Grease vs stock QIDI
 
@@ -57,7 +57,7 @@ What one Beacon conversion was seen to change, as `tools/config_diff.py` showed 
 
 ## Optional changes
 
-Two changes are off unless you ask for them, because they change how a fan and a heater are controlled. Both come from [JarvisAKF](https://github.com/JarvisAKF)'s own Plus 4, where they've run for over a year. Add the switches to `install` (and to `install --dry-run` to see them first); `uninstall` takes them out with everything else.
+Three changes are off unless you ask for them, because they change how a fan and heaters are controlled. The first two come from [JarvisAKF](https://github.com/JarvisAKF)'s own Plus 4, where they've run for over a year. Add the switches to `install` (and to `install --dry-run` to see them first); `uninstall` takes them out with everything else.
 
 **`--board-fan`: a temperature-driven board fan.** QIDI's `[controller_fan board_fan]` runs the mainboard fan at full speed whenever X/Y are enabled or the chamber heater is on. This replaces it with `plus4-grease-board-fan.cfg`: every 5 s the fan is set from the hottest of the X/Y TMC2240 drivers (ramping from 60 to 70 °C) and the mainboard's own chip (45 to 65 °C, a new `[temperature_sensor mainboard_mcu]`), with a 30% floor while X/Y are enabled or the chamber is heating, and full speed if Klipper shuts down. QIDI's `GD32` sensor isn't used for this: it reads the toolhead board's chip, not the mainboard's.
 
@@ -73,13 +73,13 @@ Klipper shuts the printer down if the mean passes 80 °C or the sensors disagree
 QIDI's web page is Fluidd v1.30.4 with QIDI's Box panel added. `fluidd install` adds upstream Fluidd v1.38.1 next to it, on port 81, and leaves QIDI's exactly as it is on port 80. Open whichever you like: `http://<printer-ip>/` is QIDI's, `http://<printer-ip>:81/` is the new one. (Port 8080 is taken by the camera.)
 
 - **What's different:** eight Fluidd versions of fixes and features since QIDI's copy. It's also lighter on the printer: every file comes pre-compressed and nginx sends it as stored, the browser keeps the hashed files for good, and this page writes no nginx access log. The whole folder is 17 MB.
-- **The Box:** a Box card, ported from Valve Oil's Fluidd, shows each slot's filament and color, the Box's humidity and temperature, which slot is loaded, the hub and toolhead sensors, and a running or failed Box step with QIDI's error. Its Load, Unload, Eject, Read RFID and Box settings send the same commands as QIDI's own page. The Box heater is held to QIDI's limit for the filaments loaded (locked for PLA and TPU), as on QIDI's page.
+- **The Box:** a Box card, ported from Valve Oil's Fluidd, shows each slot's filament and color, the Box's humidity and temperature, which slot is loaded, the hub and toolhead sensors, and a running or failed Box step with QIDI's error. Its Load, Unload, Eject, Read RFID and Box settings send the same commands as QIDI's own page. The Box heater is held to QIDI's limit for the filaments loaded (locked for PLA and TPU), as on QIDI's page. With `install --box-dry` it can also dry the Box with a timer and humidity control (see [Optional changes](#optional-changes)).
 - **Settings:** it keeps its own (Moonraker namespace `plus4_grease_fluidd`), so the two pages never overwrite each other's layout. The first install copies QIDI Fluidd's settings across, so your theme, macros and layout carry over.
 - **Cameras** are passed through to QIDI's page, so the new one uses the same camera setup.
 
-**Install.** Get `plus4-grease-fluidd-v1.38.1-5.zip` onto the printer next to `install.sh` or in your home folder. It's attached to the release, or build it with `tools/build_fluidd.sh` on a computer. From your computer (PowerShell, in the folder with the zip):
+**Install.** Get `plus4-grease-fluidd-v1.38.1-6.zip` onto the printer next to `install.sh` or in your home folder. It's attached to the release, or build it with `tools/build_fluidd.sh` on a computer. From your computer (PowerShell, in the folder with the zip):
 ```
-scp plus4-grease-fluidd-v1.38.1-5.zip mks@<printer-ip>:~/
+scp plus4-grease-fluidd-v1.38.1-6.zip mks@<printer-ip>:~/
 ```
 Then on the printer:
 ```
@@ -89,6 +89,8 @@ bash ~/plus4-grease/install.sh fluidd install
 It checks the zip's SHA-256, unpacks it to `~/plus4-grease-fluidd`, adds the nginx site `/etc/nginx/sites-available/plus4-grease-fluidd` with `sudo`, has nginx test the site, reloads nginx (QIDI's page and a running print aren't interrupted), and checks the new page loads and reaches Moonraker. If any step fails, it puts everything back. `--port` picks another port. Running it again after updating Plus4 Grease updates an installed Fluidd in place and keeps its settings.
 
 **Remove:** `bash ~/plus4-grease/install.sh fluidd remove` deletes the site and the folder and reloads nginx. Its settings stay in Moonraker's database, so a reinstall picks them up.
+
+**`--box-dry`: Box drying with a timer and humidity control.** QIDI's touchscreen dries the Box by setting the Box heater (`SET_HEATER_TEMPERATURE HEATER=heater_box1 TARGET=45`) and keeps the timer on the screen. This adds two macros that keep it in Klipper instead, which the new Fluidd's Box card uses: `PLUS4_BOX_DRY BOX=1 TEMP=45 HOURS=4 HUMIDITY=20` and `PLUS4_BOX_DRY_STOP BOX=1`. HOURS 0 runs until stopped. With HUMIDITY, the heater goes off once the Box reads at or below it and back on 5 points above it, until the time runs out. It never heats above QIDI's Box limit for the filaments loaded in that Box (from QIDI's filament list: 0 for PLA and TPU, which refuses to heat; 45 °C for PETG, ABS and ASA; up to 65 °C for nylons and other carbon-fiber blends), refuses a loaded filament that isn't in QIDI's list, and stops if the Box heater is changed elsewhere, from the touchscreen say. A Klipper restart ends it with the heater off.
 
 ## How it stays safe
 
@@ -153,7 +155,6 @@ What's known about the Plus 4's software and boards is in [docs/plus4-notes.md](
 
 Candidates, each needing a test on a Plus 4 before it ships:
 
-- Box drying from the Box card with a timer, as on the touchscreen, once what the touchscreen sends is known.
 
 - On hold: saving the config in the background, as Valve Oil does. On a Beacon Plus 4, `tools/klipper_report.py` found no pause in Klipper's main loop during print start's config save (a Stats line every second throughout), so there's nothing to win there yet. A stock Plus 4's numbers would settle it for QIDI's `G29`.
 - Fixes for QIDI Box bugs on the Plus 4, such as its Box software looking for the filament list in the wrong folder (`/home/qidi`).

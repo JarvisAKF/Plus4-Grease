@@ -11,6 +11,7 @@ docs/testing.md). 300 leaves room for printers that haven't been tested; above i
 under 2 s more.
 """
 import collections
+import os
 
 Edit = collections.namedtuple("Edit", "file find replace")
 # setting: the one option a feature sets, for printers where someone set it by hand (install
@@ -22,6 +23,10 @@ Feature = collections.namedtuple("Feature", "id title detail source edits settin
 Setting = collections.namedtuple("Setting", "file section option value")
 
 PROBE_MOVE_SPEED = 300
+BOX_DRY_FILE = "plus4-grease-box-dry.cfg"
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), BOX_DRY_FILE), "r", encoding="utf-8",
+          newline="") as _handle:
+    BOX_DRY_CFG = _handle.read()
 BOARD_FAN_FILE = "plus4-grease-board-fan.cfg"
 BOARD_FAN_CFG = r'''# Plus4 Grease: temperature-driven mainboard fan for the QIDI Plus 4 (install --board-fan).
 # From JarvisAKF's Plus 4, where it has run for over a year. It replaces QIDI's [controller_fan board_fan],
@@ -291,5 +296,35 @@ FEATURES = (
             ),
         ),
         option="balanced-chamber",
+    ),
+    Feature(
+        id="box_dry",
+        title="Box drying with a timer and humidity control (install --box-dry)",
+        detail=(
+            "Adds PLUS4_BOX_DRY BOX=1 TEMP=45 HOURS=4 HUMIDITY=20 and PLUS4_BOX_DRY_STOP BOX=1, which the new "
+            "Fluidd's Box card uses. Drying is the Box heater at a temperature, as QIDI's touchscreen does it "
+            "(SET_HEATER_TEMPERATURE HEATER=heater_boxN), with a timer kept by Klipper and, if HUMIDITY is "
+            "given, the heater switched off at or below that humidity and back on 5 points above it. It never "
+            "goes above QIDI's Box limit for the filaments loaded (0 for PLA and TPU refuses to heat), refuses "
+            "a loaded filament QIDI's list doesn't name, and stops if the Box heater is changed elsewhere."
+        ),
+        source="Plus4 Grease, from the command QIDI's touchscreen sends to dry the Box on V2.1.1.",
+        edits=(
+            Edit(
+                file="printer.cfg",
+                find=(
+                    "[include KAMP_Settings.cfg]\n"
+                    "[include box.cfg]\n"
+                ),
+                replace=(
+                    "[include KAMP_Settings.cfg]\n"
+                    "# Plus4 Grease (--box-dry): Box drying macros.\n"
+                    "[include {}]\n"
+                    "[include box.cfg]\n"
+                ).format(BOX_DRY_FILE),
+            ),
+        ),
+        files=((BOX_DRY_FILE, BOX_DRY_CFG),),
+        option="box-dry",
     ),
 )

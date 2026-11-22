@@ -1,9 +1,9 @@
 diff --git a/src/components/widgets/qidiBox/QidiBoxCard.vue b/src/components/widgets/qidiBox/QidiBoxCard.vue
 new file mode 100644
-index 0000000..cbe4f8c
+index 0000000..9d4ac73
 --- /dev/null
 +++ b/src/components/widgets/qidiBox/QidiBoxCard.vue
-@@ -0,0 +1,524 @@
+@@ -0,0 +1,553 @@
 +<template>
 +  <collapsable-card
 +    :title="$t('app.qidi_box.title.qidi_box')"
@@ -187,7 +187,7 @@ index 0000000..cbe4f8c
 +        </div>
 +
 +        <div
-+          v-for="limit in heaterLimits"
++          v-for="limit in (canDry ? [] : heaterLimits)"
 +          :key="`limit:${limit.box}`"
 +          class="text-caption text--secondary mt-2 d-flex align-center"
 +        >
@@ -201,8 +201,22 @@ index 0000000..cbe4f8c
 +        </div>
 +
 +        <div class="text-caption text--disabled mt-2">
-+          {{ $t('app.qidi_box.msg.plus4_commands') }}
++          {{ canDry ? $t('app.qidi_box.msg.plus4_commands_dry') : $t('app.qidi_box.msg.plus4_commands') }}
 +        </div>
++      </div>
++
++      <div
++        v-if="canDry"
++        class="mt-3 pa-3 rounded-lg qidi-box-card__sheet"
++      >
++        <qidi-box-dry
++          v-for="box in boxes"
++          :key="`dry:${box}`"
++          :class="{ 'mt-4': box > 1 }"
++          :box="box"
++          :box-count="boxCount"
++          :limit="heaterLimit(box)"
++        />
 +      </div>
 +    </div>
 +
@@ -234,6 +248,7 @@ index 0000000..cbe4f8c
 +import { QIDI_BOX_STEP_UNKNOWN, type QidiBoxError, type QidiBoxStepText } from '@/util/qidi-box-task'
 +import QidiBoxFlow from './QidiBoxFlow.vue'
 +import QidiBoxSettingsDialog from './QidiBoxSettingsDialog.vue'
++import QidiBoxDry from './QidiBoxDry.vue'
 +
 +const [EJECT, LOAD, UNLOAD] = [0, 1, 2]
 +const COMMANDS = ['E_BOX', 'E_LOAD', 'E_UNLOAD']
@@ -247,7 +262,8 @@ index 0000000..cbe4f8c
 +@Component({
 +  components: {
 +    QidiBoxFlow,
-+    QidiBoxSettingsDialog
++    QidiBoxSettingsDialog,
++    QidiBoxDry
 +  }
 +})
 +export default class QidiBoxCard extends Mixins(StateMixin, QidiBoxMixin) {
@@ -405,6 +421,19 @@ index 0000000..cbe4f8c
 +    }).toString()
 +  }
 +
++  get boxes (): number[] {
++    return Array.from({ length: this.boxCount }, (_, i) => i + 1)
++  }
++
++  // Plus4 Grease's --box-dry config adds PLUS4_BOX_DRY.
++  get canDry (): boolean {
++    return 'PLUS4_BOX_DRY' in this.$typedGetters['printer/getAvailableCommands']
++  }
++
++  heaterLimit (box: number): number | null {
++    return this.$typedGetters['qidiBox/getHeaterLimit'](box)
++  }
++
 +  // QIDI lets a Box heater go no higher than the lowest Box limit of the filaments loaded in that Box; 0 locks it.
 +  get heaterLimits (): { box: number, text: string }[] {
 +    return Array.from({ length: this.boxCount }, (_, i) => i + 1)
@@ -526,6 +555,217 @@ index 0000000..cbe4f8c
 +  display: flex;
 +  flex-wrap: wrap;
 +  gap: 6px;
++}
++</style>
+diff --git a/src/components/widgets/qidiBox/QidiBoxDry.vue b/src/components/widgets/qidiBox/QidiBoxDry.vue
+new file mode 100644
+index 0000000..27ee2a2
+--- /dev/null
++++ b/src/components/widgets/qidiBox/QidiBoxDry.vue
+@@ -0,0 +1,205 @@
++<template>
++  <div class="qidi-box-dry">
++    <div class="d-flex align-center text-overline text--secondary">
++      <v-icon
++        x-small
++        class="mr-1"
++      >
++        $fire
++      </v-icon>
++      {{ boxCount > 1 ? $t('app.qidi_box.dry.title_box', { box }) : $t('app.qidi_box.dry.title') }}
++    </div>
++
++    <template v-if="active">
++      <div class="text-body-2">
++        {{ statusText }}
++      </div>
++      <div class="mt-2">
++        <app-btn
++          small
++          :disabled="!klippyReady || hasWait(waitKey)"
++          @click="stop"
++        >
++          <v-icon
++            small
++            left
++          >
++            $stop
++          </v-icon>
++          {{ $t('app.qidi_box.dry.stop') }}
++        </app-btn>
++      </div>
++    </template>
++
++    <div
++      v-else-if="limit === 0"
++      class="text-caption text--secondary"
++    >
++      {{ $t('app.qidi_box.msg.plus4_heater_locked', { box }) }}
++    </div>
++
++    <v-form
++      v-else
++      v-model="valid"
++      class="qidi-box-dry__form"
++      @submit.prevent="start"
++    >
++      <v-text-field
++        v-model.number="temp"
++        :rules="[$rules.required, $rules.numberValid, $rules.numberGreaterThanOrEqual(1), $rules.numberLessThanOrEqual(maxTemp)]"
++        type="number"
++        outlined
++        dense
++        hide-details
++        persistent-placeholder
++        :label="$t('app.qidi_box.dry.temp')"
++        suffix="°C"
++      />
++      <v-text-field
++        v-model.number="hours"
++        :rules="[$rules.required, $rules.numberValid, $rules.numberGreaterThanOrEqual(0), $rules.numberLessThanOrEqual(48)]"
++        type="number"
++        outlined
++        dense
++        hide-details
++        persistent-placeholder
++        :label="$t('app.qidi_box.dry.hours')"
++        :hint="$t('app.qidi_box.dry.hours_hint')"
++        suffix="h"
++      />
++      <v-text-field
++        v-model.number="humidity"
++        :rules="[$rules.required, $rules.numberValid, $rules.numberGreaterThanOrEqual(0), $rules.numberLessThanOrEqual(90)]"
++        type="number"
++        outlined
++        dense
++        hide-details
++        persistent-placeholder
++        :label="$t('app.qidi_box.dry.humidity')"
++        suffix="%"
++      />
++      <app-btn
++        small
++        type="submit"
++        :disabled="!klippyReady || !valid || hasWait(waitKey)"
++      >
++        <v-icon
++          small
++          left
++        >
++          $fire
++        </v-icon>
++        {{ $t('app.qidi_box.dry.start') }}
++      </app-btn>
++    </v-form>
++
++    <div
++      v-if="!active && limit !== 0"
++      class="text-caption text--disabled mt-1"
++    >
++      {{ $t('app.qidi_box.dry.help', { max: maxTemp }) }}
++    </div>
++  </div>
++</template>
++
++<script lang="ts">
++// Plus4 Grease: drying for one QIDI Box, through PLUS4_BOX_DRY and PLUS4_BOX_DRY_STOP from the Plus4 Grease
++// --box-dry config (grease/plus4-grease-box-dry.cfg). Klipper keeps the timer and the humidity control, so drying
++// carries on with this page closed. The macro enforces QIDI's filament limit itself; this form only suggests it.
++import { Component, Mixins, Prop, Watch } from 'vue-property-decorator'
++import StateMixin from '@/mixins/state'
++
++interface DryState {
++  active?: number;
++  temp?: number;
++  minutes_left?: number;
++  humidity?: number;
++  heating?: number;
++}
++
++// An empty Box: the macro caps it at the highest filament limit in QIDI's list.
++const EMPTY_LIMIT = 65
++
++@Component({})
++export default class QidiBoxDry extends Mixins(StateMixin) {
++  @Prop({ type: Number, required: true })
++  readonly box!: number
++
++  @Prop({ type: Number, required: true })
++  readonly boxCount!: number
++
++  // QIDI's Box heater limit for the filaments loaded; null when unknown.
++  @Prop({ type: Number, default: null })
++  readonly limit!: number | null
++
++  valid = true
++  temp = 0
++  hours = 4
++  humidity = 0
++
++  get waitKey (): string {
++    return `onQidiBoxDry${this.box}`
++  }
++
++  get maxTemp (): number {
++    return this.limit ?? EMPTY_LIMIT
++  }
++
++  get state (): DryState {
++    return this.$typedState.printer.printer[`gcode_macro _PLUS4_BOX_DRY_${this.box}`] ?? {}
++  }
++
++  get active (): boolean {
++    return Number(this.state.active) === 1
++  }
++
++  get humidityNow (): number | null {
++    const humidity = this.$typedState.printer.printer[`aht20_f heater_box${this.box}`]?.humidity
++
++    return humidity != null ? Math.round(humidity) : null
++  }
++
++  get statusText (): string {
++    const { temp, minutes_left: minutes, humidity, heating } = this.state
++    const parts = [
++      heating
++        ? this.$t('app.qidi_box.dry.status_heating', { temp }).toString()
++        : this.$t('app.qidi_box.dry.status_paused', { temp, humidity: this.humidityNow ?? '?' }).toString(),
++      minutes != null && minutes > 0
++        ? this.$t('app.qidi_box.dry.time_left', { hours: Math.floor(minutes / 60), minutes: minutes % 60 }).toString()
++        : this.$t('app.qidi_box.dry.until_stopped').toString()
++    ]
++
++    if (humidity) parts.push(this.$t('app.qidi_box.dry.keeping', { humidity }).toString())
++
++    return parts.join(' · ')
++  }
++
++  @Watch('maxTemp', { immediate: true })
++  onMaxTempChanged (max: number) {
++    if (!this.temp || this.temp > max) this.temp = max
++  }
++
++  start () {
++    if (!this.valid || this.active) return
++
++    this.sendGcode(
++      `PLUS4_BOX_DRY BOX=${this.box} TEMP=${Math.round(this.temp)} HOURS=${this.hours} HUMIDITY=${Math.round(this.humidity)}`,
++      this.waitKey
++    )
++  }
++
++  stop () {
++    this.sendGcode(`PLUS4_BOX_DRY_STOP BOX=${this.box}`, this.waitKey)
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.qidi-box-dry__form {
++  display: grid;
++  grid-template-columns: repeat(3, minmax(90px, 1fr)) auto;
++  gap: 8px;
++  align-items: center;
 +}
 +</style>
 diff --git a/src/components/widgets/qidiBox/QidiBoxFlow.vue b/src/components/widgets/qidiBox/QidiBoxFlow.vue
@@ -1931,10 +2171,10 @@ index ed39791..d4b391b 100644
  
  export const SupportedLocales = Object.freeze([
 diff --git a/src/locales/en.yaml b/src/locales/en.yaml
-index 217e550..bdcf221 100644
+index 217e550..ae42e3d 100644
 --- a/src/locales/en.yaml
 +++ b/src/locales/en.yaml
-@@ -1456,6 +1456,223 @@ app:
+@@ -1456,6 +1456,239 @@ app:
        show_logos: Show Logos
        show_climate: Show Climate Info
        show_unavailable_spool_color: Show Unavailable Spools
@@ -2035,7 +2275,8 @@ index 217e550..bdcf221 100644
 +        filaments. Check it is valid JSON, then restart the printer.
 +      flow_failed_help: Retry runs the step again; Stop ends the Box operation.
 +      flow_failed_read_only: Retry or stop it on the touchscreen or on QIDI's page (port 80).
-+      plus4_commands: Load, Unload, Eject, Read RFID and Box settings send the same commands as QIDI's own page. Drying is on the touchscreen.
++      plus4_commands: Load, Unload, Eject, Read RFID and Box settings send the same commands as QIDI's own page. Drying is on the touchscreen; Plus4 Grease's install --box-dry adds it here.
++      plus4_commands_dry: Load, Unload, Eject, Read RFID and Box settings send the same commands as QIDI's own page. Drying uses Plus4 Grease's PLUS4_BOX_DRY, which keeps its timer on the printer.
 +      plus4_heater_limit: Box {box} heater up to {temp}°C, the lowest Box limit of the filaments loaded in it.
 +      plus4_heater_locked: Box {box} heater locked at 0°C. A filament loaded in it can't be heated in the Box (QIDI's limit; PLA and TPU are 0).
 +      loaded: Loaded %{slot}
@@ -2128,6 +2369,21 @@ index 217e550..bdcf221 100644
 +      vo_box_spool_roll_help: >-
 +        While the Box heater is on, including during a print, each empty slot
 +        turns its spool every 5 minutes. Slots with filament fed never turn.
++    dry:
++      help: "Up to {max}°C for the filaments loaded. Hours 0 runs until stopped. Humidity 0 is off; otherwise the heater goes off at or below it and back on 5 points above it."
++      hours: Hours
++      hours_hint: 0 runs until stopped
++      humidity: Humidity
++      keeping: keeping humidity at or below {humidity}%
++      start: Dry
++      status_heating: "Drying at {temp}°C"
++      status_paused: "Heater paused at {humidity}% humidity (drying at {temp}°C)"
++      stop: Stop
++      temp: Temperature
++      time_left: "{hours} h {minutes} min left"
++      title: Drying
++      title_box: Drying, Box {box}
++      until_stopped: until stopped
 +    step:
 +      bite: Gripping the external spool's filament
 +      cut: Cutting filament

@@ -391,6 +391,20 @@ class OptInTests(unittest.TestCase):
         core.uninstall(self.printer.paths, FakeKlipper(), self.printer.report)
         self.assertEqual(self.printer.text("printer.cfg"), stock_text("printer.cfg"))
 
+    def test_box_dry_in_and_out(self):
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, options=["box-dry"])
+        text = self.printer.text("printer.cfg")
+        self.assertIn("[include KAMP_Settings.cfg]\n# Plus4 Grease (--box-dry): Box drying macros.\n"
+                      "[include plus4-grease-box-dry.cfg]\n[include box.cfg]\n", text)
+        self.assertEqual(text.count("[include box.cfg]"), 1)
+        dry = self.printer.paths.config_file("plus4-grease-box-dry.cfg")
+        with open(dry) as handle:
+            self.assertIn("[gcode_macro PLUS4_BOX_DRY]", handle.read())
+        self.assertIn("box_dry", core.load_state(self.printer.paths)["applied"])
+        core.uninstall(self.printer.paths, FakeKlipper(), self.printer.report)
+        self.assertFalse(os.path.exists(dry))
+        self.assertEqual(self.printer.text("printer.cfg"), stock_text("printer.cfg"))
+
     def test_klipper_failing_takes_the_new_file_away_too(self):
         with self.assertRaises(GreaseError):
             core.install(self.printer.paths, FakeKlipper(ready=False), self.printer.report,

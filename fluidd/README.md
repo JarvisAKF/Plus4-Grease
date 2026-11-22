@@ -11,6 +11,7 @@ It's ported from Valve Oil's Fluidd (https://github.com/thelegendtubaguy/fluidd,
 - copied unchanged: `src/util/qidi-box.ts`, `qidi-box-flow.ts` and their tests, and `qidi-box-task.ts` but for the one addition below; `src/store/qidiBox/`; `src/components/widgets/qidiBox/` `QidiBoxFlow`, `QidiBoxUnit`, `QidiBoxSpool`, `QidiBoxNozzle`, `QidiBoxLoadedSummary`; the `qidi_box` English text and the Box icon
 - `src/util/qidi-box-task.ts`: one addition, `qidiBoxToolheadFilament`, which reads the Plus 4's `hall_filament_width_sensor` (filament while `Diameter` is above `min_diameter`) where QIDI's newer printers have a filament switch; the Box store and the loaded-slot check use it. Tested in `qidi-box-toolhead.spec.ts`.
 - `QidiBoxCard.vue`: Valve Oil's card cut down to Load, Unload, Eject and Read RFID with QIDI's V2.1.1 commands; no dialogs, tool mapping, flow retry, jog or cut
+- `QidiBoxDry.vue` (Plus4 Grease's own): drying controls for each Box, shown when Plus4 Grease's `--box-dry` macros are installed; it sends `PLUS4_BOX_DRY` and `PLUS4_BOX_DRY_STOP` and shows the macros' state
 - `QidiBoxSettingsDialog.vue`: Valve Oil's dialog cut down to QIDI's three Box settings, sent as QIDI's V2.1.1 page sends them
 - `src/mixins/qidiBox.ts`: reads `officiall_filas_list.cfg` (Valve Oil's also reads the newer firmware's filament database)
 - `src/util/qidi-box.ts`: one addition: a slot's nozzle and Box limits fall back to the `officiall_filas_list.cfg` entry with the slot's filament name. Tested in `qidi-box-plus4-limits.spec.ts`.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.0
+- Optional `install --box-dry`: Box drying with a timer and humidity control, kept by Klipper so it carries on with the web page closed. `PLUS4_BOX_DRY BOX=1 TEMP=45 HOURS=4 HUMIDITY=20` sets the Box heater as QIDI's touchscreen does (`SET_HEATER_TEMPERATURE HEATER=heater_box1`), stops after the hours given (0 runs until stopped), and with `HUMIDITY` switches the heater off at or below that humidity and back on 5 points above it. `PLUS4_BOX_DRY_STOP BOX=1` stops it. It never goes above QIDI's Box limit for the filaments loaded (a table from QIDI's V2.1.1 `officiall_filas_list.cfg`; 0 for PLA and TPU refuses to heat), refuses a loaded filament that table doesn't have, and stops if the Box heater is changed elsewhere. The macros are in `plus4-grease-box-dry.cfg`, included from `printer.cfg`; `uninstall` removes both.
+- The new Fluidd's Box card has drying controls when `--box-dry` is installed: temperature, hours and humidity, Dry and Stop, and what's running (Fluidd build 6).
+- `tests/test_box_dry.py` renders the drying macros as Klipper does (Jinja2) against a pretend Plus 4 and checks the limits, timer, humidity switching and hand-over.
+
 ## 0.8.0
 - The new Fluidd holds the Box heater to QIDI's limit (Fluidd build 5). QIDI lets a Box heater go no higher than the lowest Box limit of the filaments loaded in that Box, from `officiall_filas_list.cfg`: 0 for PLA and TPU, which locks it, 45 °C for PETG and ABS, up to 65 °C for nylons. Build 4 let `heater_box1` be set up to its `target_max_temp` (90 °C) whatever was loaded. The temperature card now refuses a higher target and greys out a locked Box heater, and the Box card says what the limit is. QIDI's own page checks only the Box's first slot; this checks every loaded slot. From Valve Oil's Fluidd.
 - Heaters with QIDI's `target_min_temp` and `target_max_temp` (the stock chamber's 45-65 °C) show those limits in the temperature card instead of failing in Klipper.
