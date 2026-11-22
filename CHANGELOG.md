@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.0
+- The new Fluidd holds the Box heater to QIDI's limit (Fluidd build 5). QIDI lets a Box heater go no higher than the lowest Box limit of the filaments loaded in that Box, from `officiall_filas_list.cfg`: 0 for PLA and TPU, which locks it, 45 °C for PETG and ABS, up to 65 °C for nylons. Build 4 let `heater_box1` be set up to its `target_max_temp` (90 °C) whatever was loaded. The temperature card now refuses a higher target and greys out a locked Box heater, and the Box card says what the limit is. QIDI's own page checks only the Box's first slot; this checks every loaded slot. From Valve Oil's Fluidd.
+- Heaters with QIDI's `target_min_temp` and `target_max_temp` (the stock chamber's 45-65 °C) show those limits in the temperature card instead of failing in Klipper.
+- Box settings on the Box card: Detection on insertion, Detection on startup and Automatic reload, set as QIDI's own page sets them (`SAVE_VARIABLE VARIABLE=<name> VALUE="1"` or `"0"`).
+
 ## 0.7.1
 - The Box card draws loaded filament past the hub to the toolhead, extruder and nozzle on the Plus 4 (Fluidd build 4). It looked for the filament switch QIDI's newer printers have at the toolhead; the Plus 4's toolhead sensor is `hall_filament_width_sensor`, which now counts as filament while its diameter reading is above its `min_diameter`, as QIDI's own runout check does. The same reading finds the external spool loaded.
 

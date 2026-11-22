@@ -1,9 +1,9 @@
 diff --git a/src/components/widgets/qidiBox/QidiBoxCard.vue b/src/components/widgets/qidiBox/QidiBoxCard.vue
 new file mode 100644
-index 0000000..5128ed2
+index 0000000..cbe4f8c
 --- /dev/null
 +++ b/src/components/widgets/qidiBox/QidiBoxCard.vue
-@@ -0,0 +1,472 @@
+@@ -0,0 +1,524 @@
 +<template>
 +  <collapsable-card
 +    :title="$t('app.qidi_box.title.qidi_box')"
@@ -11,6 +11,22 @@ index 0000000..5128ed2
 +    draggable
 +    layout-path="dashboard.box-card"
 +  >
++    <template #menu>
++      <app-btn
++        small
++        class="me-1 my-1"
++        @click="settingsOpen = true"
++      >
++        <v-icon
++          small
++          class="me-1"
++        >
++          $cog
++        </v-icon>
++        {{ $t('app.qidi_box.btn.box_settings') }}
++      </app-btn>
++    </template>
++
 +    <div class="pa-3 qidi-box-card">
 +      <qidi-box-flow
 +        :slots="slots"
@@ -170,11 +186,30 @@ index 0000000..5128ed2
 +          </app-btn>
 +        </div>
 +
++        <div
++          v-for="limit in heaterLimits"
++          :key="`limit:${limit.box}`"
++          class="text-caption text--secondary mt-2 d-flex align-center"
++        >
++          <v-icon
++            x-small
++            class="mr-1"
++          >
++            $fire
++          </v-icon>
++          {{ limit.text }}
++        </div>
++
 +        <div class="text-caption text--disabled mt-2">
 +          {{ $t('app.qidi_box.msg.plus4_commands') }}
 +        </div>
 +      </div>
 +    </div>
++
++    <qidi-box-settings-dialog
++      v-if="settingsOpen"
++      v-model="settingsOpen"
++    />
 +  </collapsable-card>
 +</template>
 +
@@ -186,6 +221,7 @@ index 0000000..5128ed2
 +// multi_color_controller, but not the newer firmware's LOAD_FILAMENT_CONTROL family, so those are never sent.
 +import { Component, Mixins, Watch } from 'vue-property-decorator'
 +import StateMixin from '@/mixins/state'
++import QidiBoxMixin from '@/mixins/qidiBox'
 +import { Waits } from '@/globals'
 +import {
 +  QIDI_BOX_EXTERNAL_SLOT,
@@ -197,6 +233,7 @@ index 0000000..5128ed2
 +} from '@/util/qidi-box'
 +import { QIDI_BOX_STEP_UNKNOWN, type QidiBoxError, type QidiBoxStepText } from '@/util/qidi-box-task'
 +import QidiBoxFlow from './QidiBoxFlow.vue'
++import QidiBoxSettingsDialog from './QidiBoxSettingsDialog.vue'
 +
 +const [EJECT, LOAD, UNLOAD] = [0, 1, 2]
 +const COMMANDS = ['E_BOX', 'E_LOAD', 'E_UNLOAD']
@@ -209,15 +246,17 @@ index 0000000..5128ed2
 +
 +@Component({
 +  components: {
-+    QidiBoxFlow
++    QidiBoxFlow,
++    QidiBoxSettingsDialog
 +  }
 +})
-+export default class QidiBoxCard extends Mixins(StateMixin) {
++export default class QidiBoxCard extends Mixins(StateMixin, QidiBoxMixin) {
 +  readonly eject = EJECT
 +  readonly load = LOAD
 +  readonly unload = UNLOAD
 +
 +  selected = 0
++  settingsOpen = false
 +
 +  get boxCount (): number {
 +    return this.$typedGetters['qidiBox/getBoxCount']
@@ -364,6 +403,19 @@ index 0000000..5128ed2
 +    return this.$t('app.qidi_box.msg.reload_with', {
 +      slots: group.members.filter(member => member !== this.current.index).map(qidiBoxSlotLabel).join(', ')
 +    }).toString()
++  }
++
++  // QIDI lets a Box heater go no higher than the lowest Box limit of the filaments loaded in that Box; 0 locks it.
++  get heaterLimits (): { box: number, text: string }[] {
++    return Array.from({ length: this.boxCount }, (_, i) => i + 1)
++      .map(box => ({ box, limit: this.$typedGetters['qidiBox/getHeaterLimit'](box) as number | null }))
++      .filter(({ limit }) => limit != null)
++      .map(({ box, limit }) => ({
++        box,
++        text: limit === 0
++          ? this.$t('app.qidi_box.msg.plus4_heater_locked', { box }).toString()
++          : this.$t('app.qidi_box.msg.plus4_heater_limit', { box, temp: limit }).toString()
++      }))
 +  }
 +
 +  // Box commands run one at a time; a command's buttons stay off until Klipper answers it.
@@ -1242,6 +1294,67 @@ index 0000000..a3aec82
 +  stroke-width: 1;
 +}
 +</style>
+diff --git a/src/components/widgets/qidiBox/QidiBoxSettingsDialog.vue b/src/components/widgets/qidiBox/QidiBoxSettingsDialog.vue
+new file mode 100644
+index 0000000..2638d14
+--- /dev/null
++++ b/src/components/widgets/qidiBox/QidiBoxSettingsDialog.vue
+@@ -0,0 +1,55 @@
++<template>
++  <app-dialog
++    v-model="open"
++    :title="$t('app.qidi_box.settings.title')"
++    width="720"
++    no-actions
++  >
++    <v-card-text class="pa-0">
++      <template v-for="(setting, i) in settings">
++        <v-divider
++          v-if="i > 0"
++          :key="`divider-${setting.variable}`"
++        />
++        <app-setting
++          :key="setting.variable"
++          :title="$t(`app.qidi_box.settings.${setting.variable}`)"
++          :sub-title="$t(`app.qidi_box.settings.${setting.variable}_help`)"
++        >
++          <v-switch
++            :input-value="setting.value"
++            :disabled="!klippyReady"
++            class="mt-0"
++            hide-details
++            @change="save(setting.variable, $event)"
++          />
++        </app-setting>
++      </template>
++    </v-card-text>
++  </app-dialog>
++</template>
++
++<script lang="ts">
++// Plus4 Grease: QIDI's three Box settings, from Valve Oil's Fluidd. They're saved variables QIDI's Box modules read,
++// set exactly as QIDI's own Fluidd sets them on the Plus 4's V2.1.1: SAVE_VARIABLE VARIABLE=<name> VALUE="1" or "0".
++import { Component, Mixins, VModel } from 'vue-property-decorator'
++import StateMixin from '@/mixins/state'
++
++const VARIABLES = ['auto_read_rfid', 'auto_init_detect', 'auto_reload_detect']
++
++@Component({})
++export default class QidiBoxSettingsDialog extends Mixins(StateMixin) {
++  @VModel({ type: Boolean })
++  open!: boolean
++
++  get settings () {
++    const variables = this.$typedState.printer.printer.save_variables?.variables ?? {}
++
++    return VARIABLES.map(variable => ({ variable, value: Number(variables[variable] ?? 0) === 1 }))
++  }
++
++  save (variable: string, value: boolean) {
++    this.sendGcode(`SAVE_VARIABLE VARIABLE=${variable} VALUE="${value ? 1 : 0}"`)
++  }
++}
++</script>
 diff --git a/src/components/widgets/qidiBox/QidiBoxSpool.vue b/src/components/widgets/qidiBox/QidiBoxSpool.vue
 new file mode 100644
 index 0000000..f3b7e1e
@@ -1738,6 +1851,44 @@ index 0000000..1d0be58
 +  visibility: hidden;
 +}
 +</style>
+diff --git a/src/components/widgets/thermals/TemperatureTargets.vue b/src/components/widgets/thermals/TemperatureTargets.vue
+index 0b00d7e..d537b6a 100644
+--- a/src/components/widgets/thermals/TemperatureTargets.vue
++++ b/src/components/widgets/thermals/TemperatureTargets.vue
+@@ -89,13 +89,13 @@
+           <td @contextmenu.stop>
+             <app-text-field
+               v-if="klippyReady"
+-              :disabled="item.disconnected"
++              :disabled="item.disconnected || (item.targetMaxTemp === 0 && !item.target)"
+               :value="item.target"
+               :rules="[
+                 $rules.required,
+                 $rules.numberValid,
+-                $rules.numberGreaterThanOrEqualOrZero(item.minTemp),
+-                $rules.numberLessThanOrEqualOrZero(item.maxTemp)
++                $rules.numberGreaterThanOrEqualOrZero(Math.max(item.minTemp, item.targetMinTemp ?? item.minTemp)),
++                $rules.numberLessThanOrEqualOrZero(Math.min(item.maxTemp, item.targetMaxTemp ?? item.maxTemp))
+               ]"
+               type="number"
+               outlined
+@@ -354,6 +354,7 @@ import HeaterContextMenu from './HeaterContextMenu.vue'
+ import HeaterPidCalibrateDialog from './HeaterPidCalibrateDialog.vue'
+ import HeaterMpcCalibrateDialog from './HeaterMpcCalibrateDialog.vue'
+ import StateMixin from '@/mixins/state'
++import QidiBoxMixin from '@/mixins/qidiBox'
+ import type { Fan, Heater, Sensor } from '@/store/printer/types'
+ import { chartBufferRateOfChange } from '@/util/chart-buffer'
+ import type { ChartBuffer, ChartSelectedLegends } from '@/store/charts/types'
+@@ -370,7 +371,7 @@ import isNullOrEmpty, { type NullableOrEmpty } from '@/util/is-null-or-empty'
+     HeaterMpcCalibrateDialog
+   }
+ })
+-export default class TemperatureTargets extends Mixins(StateMixin) {
++export default class TemperatureTargets extends Mixins(StateMixin, QidiBoxMixin) {
+   contextMenuState: any = {
+     open: false,
+     x: 0,
 diff --git a/src/globals.ts b/src/globals.ts
 index ed39791..d4b391b 100644
 --- a/src/globals.ts
@@ -1780,10 +1931,10 @@ index ed39791..d4b391b 100644
  
  export const SupportedLocales = Object.freeze([
 diff --git a/src/locales/en.yaml b/src/locales/en.yaml
-index 217e550..5171c68 100644
+index 217e550..bdcf221 100644
 --- a/src/locales/en.yaml
 +++ b/src/locales/en.yaml
-@@ -1456,6 +1456,221 @@ app:
+@@ -1456,6 +1456,223 @@ app:
        show_logos: Show Logos
        show_climate: Show Climate Info
        show_unavailable_spool_color: Show Unavailable Spools
@@ -1884,7 +2035,9 @@ index 217e550..5171c68 100644
 +        filaments. Check it is valid JSON, then restart the printer.
 +      flow_failed_help: Retry runs the step again; Stop ends the Box operation.
 +      flow_failed_read_only: Retry or stop it on the touchscreen or on QIDI's page (port 80).
-+      plus4_commands: Load, Unload, Eject and Read RFID send the same commands as QIDI's own page. Drying is on the touchscreen or QIDI's page (port 80).
++      plus4_commands: Load, Unload, Eject, Read RFID and Box settings send the same commands as QIDI's own page. Drying is on the touchscreen.
++      plus4_heater_limit: Box {box} heater up to {temp}°C, the lowest Box limit of the filaments loaded in it.
++      plus4_heater_locked: Box {box} heater locked at 0°C. A filament loaded in it can't be heated in the Box (QIDI's limit; PLA and TPU are 0).
 +      loaded: Loaded %{slot}
 +      missing_slot: >-
 +        Choose a Box slot for every filament, or turn off the QIDI Box to print
@@ -2005,6 +2158,47 @@ index 217e550..5171c68 100644
    sensors:
      title:
        sensors: Sensors
+diff --git a/src/mixins/qidiBox.ts b/src/mixins/qidiBox.ts
+new file mode 100644
+index 0000000..f2f6d2f
+--- /dev/null
++++ b/src/mixins/qidiBox.ts
+@@ -0,0 +1,35 @@
++import { Component, Mixins, Watch } from 'vue-property-decorator'
++import { consola } from 'consola'
++import FilesMixin from './files'
++import { parseQidiFilamentList } from '@/util/qidi-box'
++
++// Plus4 Grease, from Valve Oil's Fluidd: reads QIDI's officiall_filas_list.cfg from the config folder once Klipper
++// is ready, for each filament's nozzle and Box temperature limits. Valve Oil also reads the newer firmware's filament
++// database; the Plus 4 on V2.1.1 has none.
++@Component
++export default class QidiBoxMixin extends Mixins(FilesMixin) {
++  // Once Klipper is ready and has reported a Box.
++  get qidiBoxFilamentsWanted (): boolean {
++    return this.$typedGetters['printer/getKlippyReady'] && this.$typedGetters['qidiBox/getBoxCount'] > 0
++  }
++
++  @Watch('qidiBoxFilamentsWanted', { immediate: true })
++  onQidiBoxFilamentsWanted (wanted: boolean) {
++    if (wanted) this.loadQidiBoxFilaments()
++  }
++
++  async loadQidiBoxFilaments () {
++    if (this.$typedState.qidiBox.filamentList != null) return
++
++    try {
++      const response = await this.serverFilesGet<string>('config/officiall_filas_list.cfg', {
++        responseType: 'text',
++        transformResponse: [(value: string) => value]
++      })
++
++      this.$typedCommit('qidiBox/setFilamentList', parseQidiFilamentList(response.data))
++    } catch (error) {
++      consola.debug('[QidiBox] filament list unavailable', error)
++    }
++  }
++}
 diff --git a/src/store/index.ts b/src/store/index.ts
 index a14922c..d2e329f 100644
 --- a/src/store/index.ts
@@ -2039,6 +2233,57 @@ index 36e57ac..9575b05 100644
            { id: 'spoolman-card', enabled: true, collapsed: false },
            { id: 'mmu-card', enabled: true, collapsed: false },
            { id: 'camera-card', enabled: true, collapsed: false },
+diff --git a/src/store/printer/getters.ts b/src/store/printer/getters.ts
+index ae60228..3f22951 100644
+--- a/src/store/printer/getters.ts
++++ b/src/store/printer/getters.ts
+@@ -595,7 +595,7 @@ export const getters = {
+   /**
+    * Return available heaters
+    */
+-  getHeaters: (state, getters, rootState): Heater[] => {
++  getHeaters: (state, getters, rootState, rootGetters): Heater[] => {
+     const nonCriticalDisconnectedMcusSet: Set<string> = getters.getNonCriticalDisconnectedMcusSet
+     const sensorColors: Record<string, string> = rootState.config.uiSettings.dashboard.sensorColors
+ 
+@@ -618,6 +618,14 @@ export const getters = {
+ 
+         const disconnected = configHasDisconnectedMcu(config, nonCriticalDisconnectedMcusSet)
+ 
++        // Plus4 Grease, from Valve Oil's Fluidd: QIDI's Klipper takes target_min_temp and target_max_temp, and QIDI
++        // lets a Box heater go no higher than the lowest Box limit of the filaments loaded in that Box (0 for PLA).
++        const limits = config as Record<string, any> | undefined
++        const boxMatch = /^heater_generic heater_box(\d+)$/.exec(key)
++        const boxLimit: number | null = boxMatch ? rootGetters['qidiBox/getHeaterLimit'](Number(boxMatch[1])) : null
++        const configTargetMax: number | undefined = limits?.target_max_temp
++        const targetMaxTemp = boxLimit != null ? Math.min(boxLimit, configTargetMax ?? boxLimit) : configTargetMax
++
+         heaters.push({
+           ...heater,
+           name,
+@@ -627,6 +635,8 @@ export const getters = {
+           key,
+           minTemp: config?.min_temp ?? 0,
+           maxTemp: config?.max_temp ?? 500,
++          targetMinTemp: limits?.target_min_temp,
++          targetMaxTemp,
+           config,
+           disconnected
+         })
+diff --git a/src/store/printer/types.ts b/src/store/printer/types.ts
+index 33ee7bd..65206d3 100644
+--- a/src/store/printer/types.ts
++++ b/src/store/printer/types.ts
+@@ -72,6 +72,9 @@ export type Heater = (
+ ) & {
+   minTemp: number;
+   maxTemp: number;
++  // Plus4 Grease: QIDI's Klipper target limits, narrowed for a QIDI Box heater by the filaments loaded in that Box.
++  targetMinTemp?: number;
++  targetMaxTemp?: number;
+ }
+ 
+ export type Fan = (
 diff --git a/src/store/qidiBox/actions.ts b/src/store/qidiBox/actions.ts
 new file mode 100644
 index 0000000..063ff4f
@@ -2446,6 +2691,59 @@ index 0000000..87ee604
 +    [null, true, false]
 +  ])('%s on dark=%s is %s', (color, dark, expected) => {
 +    expect(qidiColorNearBackground(color, dark)).toBe(expected)
++  })
++})
+diff --git a/src/util/__tests__/qidi-box-plus4-limits.spec.ts b/src/util/__tests__/qidi-box-plus4-limits.spec.ts
+new file mode 100644
+index 0000000..ce5b06d
+--- /dev/null
++++ b/src/util/__tests__/qidi-box-plus4-limits.spec.ts
+@@ -0,0 +1,47 @@
++import { describe, expect, it } from 'vitest'
++import { parseQidiFilamentList, qidiBoxSlots } from '../qidi-box'
++
++// Plus4 Grease: on the Plus 4 (QIDI firmware V2.1.1), box_extras names each slot's filament; its Box temperature limit
++// can come from officiall_filas_list.cfg by that name.
++describe('Plus 4 filament limits', () => {
++  const list = parseQidiFilamentList([
++    '[fila4]', 'filament = PLA Silk', 'min_temp = 190', 'max_temp = 240', 'box_max_temp = 0', 'type = PLA', '',
++    '[fila39]', 'filament = PETG Basic', 'min_temp = 230', 'max_temp = 260', 'box_max_temp = 45', 'type = PETG', ''
++  ].join('\n'))
++
++  const printer = (names: string[], limits?: number[]) => ({
++    save_variables: { variables: { box_count: 1 } },
++    box_extras: {
++      boxes: [{
++        filament_info: names.map((name, index) => ({
++          index,
++          filament_id: `QF${index}`,
++          filament_str: name,
++          filament_type: name.split(' ')[0],
++          vendor_str: 'QIDI',
++          color_rgb_str: '060606',
++          ...(limits ? { box_max_temp: limits[index] } : {})
++        }))
++      }]
++    },
++    'box_stepper slot0': { runout_button: 0 },
++    'box_stepper slot1': { runout_button: 0 }
++  })
++
++  it('takes the Box limit from the filament list by name when box_extras has none', () => {
++    const slots = qidiBoxSlots(printer(['PLA Silk', 'PETG Basic']), list)
++
++    expect(slots[0].boxMaxTemp).toBe(0)
++    expect(slots[1].boxMaxTemp).toBe(45)
++    expect(slots[1].minTemp).toBe(230)
++  })
++
++  it("prefers box_extras' own limit", () => {
++    expect(qidiBoxSlots(printer(['PLA Silk', 'PETG Basic'], [10, 50]), list)[1].boxMaxTemp).toBe(50)
++  })
++
++  it('leaves the limit unknown for a filament the list does not name', () => {
++    expect(qidiBoxSlots(printer(['Mystery'], undefined), list)[0].boxMaxTemp).toBeNull()
++    expect(qidiBoxSlots(printer(['PLA Silk']), null)[0].boxMaxTemp).toBeNull()
 +  })
 +})
 diff --git a/src/util/__tests__/qidi-box-task.spec.ts b/src/util/__tests__/qidi-box-task.spec.ts
@@ -3363,10 +3661,10 @@ index 0000000..1a00e54
 +}
 diff --git a/src/util/qidi-box.ts b/src/util/qidi-box.ts
 new file mode 100644
-index 0000000..ccceb36
+index 0000000..78a0dbd
 --- /dev/null
 +++ b/src/util/qidi-box.ts
-@@ -0,0 +1,331 @@
+@@ -0,0 +1,343 @@
 +// QIDI Box slots: Box 1 holds slots 0-3 (1A-1D), Box 2 slots 4-7 (2A-2D), and so on; slot 16 is the external spool.
 +
 +export const QIDI_BOX_EXTERNAL_SLOT = 16
@@ -3575,6 +3873,17 @@ index 0000000..ccceb36
 +  }
 +}
 +
++// Plus4 Grease: the filament list entry with this name. The Plus 4 on V2.1.1 names each slot's filament in
++// box_extras, but its limits may only be in officiall_filas_list.cfg.
++const listedFilament = (list: QidiFilamentList | null, name: unknown): Record<string, string> | undefined => {
++  const wanted = toText(name)?.toLowerCase()
++
++  if (list == null || wanted == null) return undefined
++
++  return Object.entries(list)
++    .find(([key, entry]) => /^fila\d+$/.test(key) && entry.filament?.trim().toLowerCase() === wanted)?.[1]
++}
++
 +export const qidiBoxSlots = (printer: Record<string, any>, list: QidiFilamentList | null): QidiBoxSlot[] => {
 +  const variables: Record<string, any> = printer.save_variables?.variables ?? {}
 +  const boxCount = Math.max(0, Math.min(4, toNumber(variables.box_count) ?? 0))
@@ -3582,6 +3891,7 @@ index 0000000..ccceb36
 +
 +  return indexes.map(index => {
 +    const info = resolvedFilament(printer, index) ?? legacyFilament(variables, list, index)
++    const listed = listedFilament(list, info?.filament_str)
 +    const stepper = printer[`box_stepper slot${index}`]
 +
 +    return {
@@ -3594,9 +3904,9 @@ index 0000000..ccceb36
 +      type: toText(info?.filament_type),
 +      vendor: toText(info?.vendor_str),
 +      color: normalizeQidiColor(info?.color_rgb_str),
-+      minTemp: toNumber(info?.min_temp),
-+      maxTemp: toNumber(info?.max_temp),
-+      boxMaxTemp: toNumber(info?.box_max_temp),
++      minTemp: toNumber(info?.min_temp) ?? toNumber(listed?.min_temp),
++      maxTemp: toNumber(info?.max_temp) ?? toNumber(listed?.max_temp),
++      boxMaxTemp: toNumber(info?.box_max_temp) ?? toNumber(listed?.box_max_temp),
 +      reading: stepper?.rfid_state === 1
 +    }
 +  })
