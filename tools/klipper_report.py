@@ -50,7 +50,8 @@ TIMEOUT = re.compile(r"Timeout with MCU '([^']+)' \(eventtime=([\d.]+)\)")
 NAMED_MCU = re.compile(r"MCU '([^']+)'")
 # A USB serial path carries the board's serial number (usb-Klipper_QIDI_BOX_V1_1.1.1_<serial>-if00).
 SERIAL_IN_PATH = re.compile(r"(usb-[^\s'\"/]*?_)([0-9A-Fa-f]{8,})(-if\d+)")
-NOISE = ("webhooks client", "webhooks: registering remote method", "Tracked URL")
+NOISE = ("webhooks client", "webhooks: registering remote method", "Tracked URL", "Modified files:", "Branch:",
+         "Remote:", "Untracked files:", "Klipper state:")
 
 
 def redact(line):
@@ -282,7 +283,13 @@ def start_reason(lines):
     notes = []
     if any("Got EOF when reading from device" in line for line in lines[:cut]):
         notes.append("A board's serial port closed under Klipper before this (\"Got EOF\"): a USB board went away.")
-    stopped = [line for line in lines[:cut] if line.startswith("Exiting SD card print")]
+    # virtual_sdcard logs "Exiting SD card print" whenever a print run ends, right after "Finished SD card
+    # print" when it ran to the end; only an exit without that is a pause or a cancel.
+    stopped = []
+    for i, line in enumerate(lines[:cut]):
+        if line.startswith("Exiting SD card print"):
+            finished = any(earlier.startswith("Finished SD card print") for earlier in lines[max(0, i - 5):i])
+            stopped = [] if finished else [line]
     if stopped:
         position = re.search(r"position (\d+)", stopped[-1])
         cancelled = any(line.strip().endswith("action:cancel") for line in lines[:cut])
