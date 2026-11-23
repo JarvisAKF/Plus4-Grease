@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 
-from . import VERSION, system
+from . import VERSION, edits_v160, system
 from .edits import FEATURES, Edit
 
 MODEL_FILE = "/dev_info.txt"
@@ -19,6 +19,27 @@ VERSION_FILE = "/root/xindi/version"
 # where every edit applies (docs/plus4-notes.md, "Firmware 1.8.x").
 SUPPORTED_SOC = ("V2.1.1", "V1.8.2", "V1.8.1")
 TESTED_SOC = "V2.1.1"
+# Firmware with a change list of its own, kept apart from edits.py: (versions, features, label). 1.6.0 is the
+# Plus 4 before the QIDI Box (grease/edits_v160.py).
+OWN_LISTS = ((edits_v160.FIRMWARE, edits_v160.FEATURES, edits_v160.LABEL),)
+
+
+def own_list(soc_version):
+    soc = normalize_soc(soc_version)
+    for versions, features, label in OWN_LISTS:
+        if soc in versions:
+            return features, label
+    return None, None
+
+
+def features_for(soc_version):
+    """The change list for this firmware: its own list if it has one, otherwise edits.py's."""
+    features, _ = own_list(soc_version)
+    return FEATURES if features is None else features
+
+
+def supported_soc():
+    return SUPPORTED_SOC + tuple(v for versions, _, _ in OWN_LISTS for v in versions)
 
 
 class GreaseError(Exception):
@@ -96,16 +117,21 @@ def check_identity(paths):
 
 def check_printer(paths, soc_version, any_firmware=False):
     check_identity(paths)
-    if normalize_soc(soc_version) not in SUPPORTED_SOC and not any_firmware:
+    if normalize_soc(soc_version) not in supported_soc() and not any_firmware:
         raise GreaseError(
             "QIDI firmware {} isn't supported; Plus4 Grease is made for {}. Update the printer first. "
             "(--any-firmware skips this check; every change still applies only where QIDI's stock text "
-            "is found.)".format(soc_version or "unknown", ", ".join(SUPPORTED_SOC)))
+            "is found.)".format(soc_version or "unknown", ", ".join(supported_soc())))
 
 
 def firmware_note(soc_version):
     """A line to print on supported firmware Plus4 Grease hasn't been tested on; None otherwise."""
     soc = normalize_soc(soc_version)
+    _, label = own_list(soc)
+    if label:
+        return ("QIDI firmware {}, from before the QIDI Box. Plus4 Grease uses its own {} change list here "
+                "(grease/edits_v160.py), checked against QIDI's published {} files but not yet tested on a "
+                "printer. The Box changes aren't offered.".format(soc, label, label))
     if soc in SUPPORTED_SOC and soc != TESTED_SOC:
         return ("QIDI firmware {}. Plus4 Grease is tested on {}; {} should work the same, and each change "
                 "still applies only where QIDI's stock text is found.".format(soc, TESTED_SOC, soc))
@@ -247,9 +273,10 @@ def user_files(features):
     return [u for f in features for u in f.user_files or ()]
 
 
-def read_files(paths):
+def read_files(paths, features=None):
+    features = FEATURES if features is None else features
     texts = {}
-    for name in touched(FEATURES) + [u.name for u in user_files(FEATURES)]:
+    for name in touched(features) + [u.name for u in user_files(features)]:
         try:
             with open(paths.file(name), "r", encoding="utf-8", newline="") as handle:
                 texts[name] = handle.read()
@@ -359,16 +386,18 @@ def effective(feature, state):
     return feature
 
 
-def plan(paths, replace_own=False, options=()):
-    """Rows for every feature. An opt-in feature that could apply but wasn't asked for is 'optional',
-    unless another feature of the same switch is already installed (an update brings its new parts). A
-    feature whose required one can't be applied is skipped."""
-    texts = read_files(paths)
+def plan(paths, replace_own=False, options=(), features=None):
+    """Rows for every feature of the list (edits.py's unless the firmware has its own). An opt-in
+    feature that could apply but wasn't asked for is 'optional', unless another feature of the same switch
+    is already installed (an update brings its new parts). A feature whose required one can't be applied
+    is skipped."""
+    features = FEATURES if features is None else features
+    texts = read_files(paths, features)
     state = load_state(paths)
-    found = {f.id: feature_status(texts, effective(f, state)) for f in FEATURES}
-    options = set(options) | {f.option for f in FEATURES if f.option and found[f.id] in ("applied", "update")}
+    found = {f.id: feature_status(texts, effective(f, state)) for f in features}
+    options = set(options) | {f.option for f in features if f.option and found[f.id] in ("applied", "update")}
     rows, by_id = [], {}
-    for feature in FEATURES:
+    for feature in features:
         current = effective(feature, state)
         status_now = found[feature.id]
         if status_now == "available" and feature.option and feature.option not in options:
@@ -450,11 +479,13 @@ def report_usb(usb, report):
                "alone.".format(system.RULE, system.SCRIPT))
 
 
-def mark_applied(paths, feature_id, on):
+def mark_applied(paths, feature_id, on, firmware=None):
     state = load_state(paths)
     applied = set(state.get("applied", []))
     applied = applied | {feature_id} if on else applied - {feature_id}
     state["applied"], state["version"] = sorted(applied), VERSION
+    if firmware:
+        state["firmware"] = normalize_soc(firmware)
     save_state(paths, state)
 
 
@@ -485,8 +516,17 @@ def write_all(paths, texts, names, folder, runner):
                           "changed.".format(error))
 
 
-def install(paths, klipper, report, dry_run=False, replace_own=False, runner=None, root=None, options=()):
-    texts, rows = plan(paths, replace_own, options)
+def recorded_features(paths):
+    """The change list the last install used, from the firmware it recorded; edits.py's if none."""
+    return features_for(load_state(paths).get("firmware"))
+
+
+def install(paths, klipper, report, dry_run=False, replace_own=False, runner=None, root=None, options=(),
+            firmware=None):
+    """firmware: the version read from the printer. It picks the change list and is recorded for status and
+    uninstall."""
+    features = features_for(firmware)
+    texts, rows = plan(paths, replace_own, options, features)
     rows = check_commands(klipper, rows)
     todo = [row for row in rows if row.status in ("available", "update")]
     kept = [row.feature for row in rows if row.status in ("applied", "available", "update")]
@@ -518,7 +558,7 @@ def install(paths, klipper, report, dry_run=False, replace_own=False, runner=Non
             system.install(paths, report, runner)
         except OSError as error:
             raise GreaseError("The USB event log couldn't be installed: {}. Nothing else was changed.".format(error))
-        mark_applied(paths, "usb_event_log", True)
+        mark_applied(paths, "usb_event_log", True, firmware)
         if not todo and not users:
             report("Done. Applied: usb_event_log.")
             return 0
@@ -542,6 +582,8 @@ def install(paths, klipper, report, dry_run=False, replace_own=False, runner=Non
                                           "was": row.note}
     new_state = {"version": VERSION, "applied": applied, "last_backup": folder,
                  "installed_at": datetime.datetime.now().isoformat(timespec="seconds")}
+    if firmware:
+        new_state["firmware"] = normalize_soc(firmware)
     if own_values:
         new_state["own_values"] = own_values
     save_state(paths, new_state)
@@ -563,9 +605,11 @@ def install(paths, klipper, report, dry_run=False, replace_own=False, runner=Non
     return 0
 
 
-def uninstall(paths, klipper, report, runner=None, root=None):
-    texts, rows = plan(paths)
+def uninstall(paths, klipper, report, runner=None, root=None, firmware=None):
+    """Uses the change list the install recorded, or firmware's (read from the printer) if none was."""
     state = load_state(paths)
+    features = features_for(state.get("firmware") or firmware)
+    texts, rows = plan(paths, features=features)
     todo = [row.feature for row in rows if row.status in ("applied", "update")]
     for row in rows:
         if row.status == "skipped" and row.feature.id in state.get("applied", []):
@@ -614,8 +658,13 @@ def uninstall(paths, klipper, report, runner=None, root=None):
 
 
 def status(paths, report, root=None):
-    texts, rows = plan(paths)
+    """No sudo here, so the firmware isn't read: the list is the one the last install recorded."""
     state = load_state(paths)
+    features = recorded_features(paths)
+    _, label = own_list(state.get("firmware"))
+    if label:
+        report("  Firmware {} (recorded at install): Plus4 Grease's {} change list.".format(state["firmware"], label))
+    texts, rows = plan(paths, features=features)
     for row in rows:
         note = ""
         if row.status == "available" and row.feature.id in state.get("applied", []):

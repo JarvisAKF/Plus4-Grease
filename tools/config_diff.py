@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Compare a QIDI Plus 4's Klipper config with QIDI's stock V2.1.1 config, section by section.
+"""Compare a QIDI Plus 4's Klipper config with QIDI's stock config, section by section.
 
 Run on the printer as mks:
 
     python3 ~/plus4-grease/tools/config_diff.py
+    python3 ~/plus4-grease/tools/config_diff.py --firmware 1.6.0     (a printer on QIDI's 1.6.0)
 
 It reads ~/printer_data/config and the stock files in ~/plus4-grease/stock/plus4-2.1.1 (from QIDI's V2.1.1
-update package, QD_Plus4_SOC) and lists, file by file, the sections and options you added, removed, or
+update package, QD_Plus4_SOC), or with --firmware 1.6.0 those in stock/plus4-1.6.0 (QIDI's published 1.6.0
+printer.cfg and gcode_macro.cfg). Without --firmware it uses the firmware Plus4 Grease's install recorded,
+if any, else V2.1.1. It lists, file by file, the sections and options you added, removed, or
 changed, with the stock and your values side by side, and macro bodies as a line diff. Plus4 Grease's own
 edits are taken out first and listed on their own, so the rest is what was changed by hand or by another
 mod (a Beacon conversion, say). The SAVE_CONFIG block at the end of printer.cfg is compared by section.
@@ -25,6 +28,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STOCK = os.path.join(HERE, "..", "stock", "plus4-2.1.1")
+STOCKS = {"V2.1.1": STOCK, "V1.6.0": os.path.join(HERE, "..", "stock", "plus4-1.6.0")}
 CONFIG = os.path.expanduser("~/printer_data/config")
 COMPARED = ("printer.cfg", "gcode_macro.cfg", "box1.cfg", "box2.cfg", "box3.cfg", "box4.cfg", "moonraker.conf",
             "officiall_filas_list.cfg")
@@ -154,9 +158,9 @@ def compare(stock, yours, out, label="", body_diff=True, saved=None):
     return count
 
 
-def undo_grease(texts, config):
-    """Take Plus4 Grease's applied edits out of the files, so they don't count as hand changes.
-    Returns (texts, titles of what was taken out)."""
+def undo_grease(texts, config, firmware=None):
+    """Take Plus4 Grease's applied edits out of the files, so they don't count as hand changes. firmware
+    picks the change list (1.6.0 has its own). Returns (texts, titles of what was taken out)."""
     sys.path.insert(0, os.path.join(HERE, ".."))
     try:
         from grease import core
@@ -167,11 +171,12 @@ def undo_grease(texts, config):
     state = core.load_state(paths)
     taken = []
     texts = dict(texts)
-    for name in core.touched(core.FEATURES):
+    features = core.features_for(firmware) if hasattr(core, "features_for") else core.FEATURES
+    for name in core.touched(features):
         path = paths.file(name) if hasattr(paths, "file") else paths.config_file(name)
         if name not in texts and os.path.isfile(path):
             texts[name] = read(path)
-    for feature in core.FEATURES:
+    for feature in features:
         current = core.effective(feature, state)
         if all(edit.file in texts for edit in current.edits) and core.feature_status(texts, current) == "applied":
             core.revert_feature(texts, current)
@@ -184,10 +189,41 @@ def read(path):
         return handle.read()
 
 
+def normalize(version):
+    version = (version or "").strip()
+    match = re.match(r"^[Vv]?(\d+(?:\.\d+)+)$", version)
+    return "V" + match.group(1) if match else version
+
+
+def recorded_firmware(config):
+    """The firmware Plus4 Grease's last install recorded, or None."""
+    home = os.path.dirname(os.path.dirname(os.path.abspath(config)))
+    sys.path.insert(0, os.path.join(HERE, ".."))
+    try:
+        from grease import core
+        return core.load_state(core.Paths(home=home)).get("firmware")
+    except Exception:  # noqa: BLE001 - run without Plus4 Grease installed
+        return None
+
+
 def main(argv=None):
-    stock_dir, config = os.path.abspath(STOCK), CONFIG
-    if argv:
-        config = argv[0]
+    args = list(argv or [])
+    firmware = None
+    if "--firmware" in args:
+        at = args.index("--firmware")
+        if at + 1 >= len(args):
+            print("--firmware needs a version: --firmware 1.6.0")
+            return 2
+        firmware = normalize(args[at + 1])
+        del args[at:at + 2]
+        if firmware not in STOCKS:
+            print("No stock files for firmware {}. There are: {}.".format(firmware, ", ".join(sorted(STOCKS))))
+            return 2
+    config = args[0] if args else CONFIG
+    if firmware is None:
+        recorded = normalize(recorded_firmware(config))
+        firmware = recorded if recorded in STOCKS else "V2.1.1"
+    stock_dir = os.path.abspath(STOCKS[firmware])
     if not os.path.isdir(stock_dir):
         print("QIDI's stock files aren't at {}; copy the stock folder from Plus4 Grease there.".format(stock_dir))
         return 1
@@ -197,14 +233,14 @@ def main(argv=None):
         lines.append(line)
         print(line)
 
-    out("Your config ({}) against QIDI's stock V2.1.1 config ({}).".format(config, stock_dir))
+    out("Your config ({}) against QIDI's stock {} config ({}).".format(config, firmware, stock_dir))
     out("Serial numbers are hidden. Values are shown as stock -> yours.")
     yours = {}
     for name in COMPARED:
         path = os.path.join(config, name)
         if os.path.isfile(path):
             yours[name] = read(path)
-    yours, taken = undo_grease(yours, config)
+    yours, taken = undo_grease(yours, config, firmware)
     out("")
     if taken:
         out("Plus4 Grease changes taken out before comparing (they're its own, listed by its status command):")
@@ -249,7 +285,7 @@ def main(argv=None):
                       if s.startswith("include ")]
     your_includes = [s[len("include "):] for s in parse(yours.get("printer.cfg", ""))[0] if s.startswith("include ")]
     if others:
-        out("Other config files (not in QIDI's update package, so not compared):")
+        out("Other config files (no stock {} copy to compare with):".format(firmware))
         for name in others:
             notes = []
             if name in your_includes:

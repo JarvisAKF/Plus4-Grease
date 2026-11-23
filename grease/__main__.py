@@ -77,8 +77,8 @@ def main(argv=None):
                                                  ("box-dry", args.box_dry or args.box_dry_pla),
                                                  ("box-dry-pla", args.box_dry_pla)) if chosen]
             return install(paths, Klipper(), report, dry_run=args.dry_run, replace_own=args.replace_own_speeds,
-                           options=options)
-        result = uninstall(paths, Klipper(), report)
+                           options=options, firmware=soc_version)
+        result = uninstall(paths, Klipper(), report, firmware=soc_version)
         if fluidd.status(paths) == "applied":
             report("Plus4 Grease's Fluidd on port {} is still there; install.sh fluidd remove takes it out."
                    .format(fluidd.load_state(paths).get("port", fluidd.PORT)))
