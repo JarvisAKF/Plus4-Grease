@@ -37,6 +37,16 @@ class Klipper(object):
         except Exception:  # noqa: BLE001
             return None
 
+    def commands(self):
+        """The G-code commands Klipper has now, upper case, or None if unreachable. From the gcode object's
+        command list: /printer/gcode/help only lists commands registered with help text, and QIDI's Box
+        commands have none."""
+        try:
+            listed = self._get("/printer/objects/query?gcode=commands")["status"]["gcode"]["commands"]
+            return {name.upper() for name in listed}
+        except Exception:  # noqa: BLE001
+            return None
+
     def require_idle(self):
         try:
             job = self._get("/printer/objects/query?print_stats=state")["status"]["print_stats"]["state"]

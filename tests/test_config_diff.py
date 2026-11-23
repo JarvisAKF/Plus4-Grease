@@ -90,7 +90,8 @@ class ConfigDiffTests(unittest.TestCase):
     def test_plus4_greases_own_edits_are_taken_out(self):
         texts = {"printer.cfg": stock("printer.cfg"), "gcode_macro.cfg": stock("gcode_macro.cfg")}
         for feature in FEATURES:
-            core.apply_feature(texts, feature)
+            if all(edit.file in texts for edit in feature.edits):  # the Box lock edits box.cfg and the templates
+                core.apply_feature(texts, feature)
         for name, text in texts.items():
             self.write(name, text)  # includes plus4-grease-board-fan.cfg
         paths = core.Paths(home=self.home)

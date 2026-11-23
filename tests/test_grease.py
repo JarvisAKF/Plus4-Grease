@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from grease import core, system
+from grease import core, edits, system
 from grease.core import GreaseError, Paths
 from grease.edits import FEATURES
 
@@ -31,17 +31,19 @@ ALL_IDS = sorted([f.id for f in DEFAULTS] + ["usb_event_log"])
 class FakeSudo(object):
     """Does what the installer asks sudo to do, inside a scratch root."""
 
-    def __init__(self, root, fail=()):
-        self.root, self.fail, self.calls = root, set(fail), []
+    def __init__(self, root, fail=(), fail_targets=()):
+        self.root, self.fail, self.fail_targets, self.calls = root, set(fail), set(fail_targets), []
 
     def where(self, path):
+        if path.startswith(tempfile.gettempdir()):  # a fake printer's home folder (QIDI's Box templates)
+            return path
         return os.path.join(self.root, path.lstrip("/"))
 
     def __call__(self, command, **kwargs):
         assert command[0] == "sudo", command
         self.calls.append(command[1:])
         args = command[1:]
-        if args[0] in self.fail:
+        if args[0] in self.fail or any(args[-1].endswith(t) for t in self.fail_targets):
             return subprocess.CompletedProcess(command, 1, stdout="permission denied")
         if args[0] == "install":
             mode, source, target = args[args.index("-m") + 1], args[-2], self.where(args[-1])
@@ -62,8 +64,12 @@ class FakeSudo(object):
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STOCK_DIR = os.path.join(HERE, "..", "stock", "plus4-2.1.1")
+# A printer with one Box: QIDI copies cfg_with_1 to box.cfg. The templates are in the home folder.
 STOCK = {"gcode_macro.cfg": os.path.join(STOCK_DIR, "gcode_macro.cfg"),
-         "printer.cfg": os.path.join(STOCK_DIR, "printer.cfg")}
+         "printer.cfg": os.path.join(STOCK_DIR, "printer.cfg"),
+         "box.cfg": os.path.join(STOCK_DIR, "cfg_with_1")}
+STOCK.update({"~/cfg_with_{}".format(n): os.path.join(STOCK_DIR, "cfg_with_{}".format(n)) for n in range(1, 5)})
+NO_BOX = os.path.join(STOCK_DIR, "cfg_with_0")
 
 
 def stock_text(name="gcode_macro.cfg"):
@@ -79,14 +85,21 @@ def by_id(feature_id):
     return next(f for f in FEATURES if f.id == feature_id)
 
 
+QIDI_COMMANDS = {"E_LOAD", "E_BOX", "E_UNLOAD", "EXTRUDER_LOAD", "EXTRUDER_UNLOAD", "PRINT_START"}
+
+
 class FakeKlipper(object):
-    def __init__(self, ready=True, loaded=None):
+    def __init__(self, ready=True, loaded=None, commands=QIDI_COMMANDS):
         self.ready = ready
         self.restarts = 0
         self.loaded = loaded
+        self.have = commands
 
     def settings(self):
         return self.loaded
+
+    def commands(self):
+        return None if self.have is None else set(self.have)
 
     def require_idle(self):
         pass
@@ -107,10 +120,11 @@ class Printer(object):
         self.paths = Paths(home=os.path.join(self.root, "home"), model_file=self.model_file)
         os.makedirs(self.paths.config)
         self.macro = self.paths.config_file("gcode_macro.cfg")
-        with open(self.macro, "w", encoding="utf-8", newline="") as handle:
-            handle.write(stock_text() if text is None else text)
-        with open(self.paths.config_file("printer.cfg"), "w", encoding="utf-8", newline="") as handle:
-            handle.write(stock_text("printer.cfg"))
+        for name in STOCK:
+            with open(self.paths.file(name), "w", encoding="utf-8", newline="") as handle:
+                handle.write(text if name == "gcode_macro.cfg" and text is not None else stock_text(name))
+            if core.is_home(name):
+                os.chmod(self.paths.file(name), 0o744)
         os.makedirs(os.path.join(self.paths.home, "printer_data", "logs"))
         self.lines = []
         self.system_root = os.path.join(self.root, "system")
@@ -124,8 +138,11 @@ class Printer(object):
         return self.text("gcode_macro.cfg")
 
     def text(self, name):
-        with open(self.paths.config_file(name), "r", encoding="utf-8", newline="") as handle:
+        with open(self.paths.file(name), "r", encoding="utf-8", newline="") as handle:
             return handle.read()
+
+    def has(self, name):
+        return os.path.exists(self.paths.file(name))
 
     def cleanup(self):
         system.RUNNER = no_real_commands
@@ -222,7 +239,7 @@ class InstallTests(unittest.TestCase):
     def test_install_and_uninstall_round_trip(self):
         klipper = FakeKlipper()
         core.install(self.printer.paths, klipper, self.printer.report)
-        for name in STOCK:
+        for name in ("gcode_macro.cfg", "printer.cfg"):
             self.assertNotEqual(self.printer.text(name), stock_text(name), name)
         self.assertEqual(sorted(core.load_state(self.printer.paths)["applied"]), ALL_IDS)
         core.uninstall(self.printer.paths, klipper, self.printer.report)
@@ -231,10 +248,10 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(klipper.restarts, 2)
 
     def test_install_keeps_a_backup_of_qidis_files(self):
-        core.install(self.printer.paths, FakeKlipper(), self.printer.report)
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, options=["box-dry"])
         folder = core.load_state(self.printer.paths)["last_backup"]
         for name in STOCK:
-            with open(os.path.join(folder, name), "r", encoding="utf-8", newline="") as handle:
+            with open(os.path.join(folder, core.backup_name(name)), "r", encoding="utf-8", newline="") as handle:
                 self.assertEqual(handle.read(), stock_text(name), name)
 
     def test_dry_run_changes_nothing(self):
@@ -431,6 +448,168 @@ class OptInTests(unittest.TestCase):
         self.assertFalse(os.path.exists(dry))
         self.assertEqual(self.printer.text("printer.cfg"), stock_text("printer.cfg"))
 
+    def lock_parts(self):
+        return ["box.cfg"] + ["~/cfg_with_{}".format(n) for n in range(1, 5)]
+
+    def test_box_dry_adds_the_lock_print_start_wait_and_settings(self):
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, options=["box-dry"])
+        include = "[include box1.cfg]\n# Plus4 Grease (--box-dry): Box cool-down lock. A pattern: nothing if the "
+        for name in self.lock_parts():
+            self.assertEqual(self.printer.text(name).count(include), 1, name)
+            self.assertEqual(self.printer.text(name).replace(
+                "# Plus4 Grease (--box-dry): Box cool-down lock. A pattern: nothing if the file is gone.\n"
+                "[include plus4-grease-box-loc[k].cfg]\n", ""), stock_text(name), name)
+        for n in range(1, 5):
+            self.assertEqual(os.stat(self.printer.paths.file("~/cfg_with_{}".format(n))).st_mode & 0o777, 0o744)
+        written = [c[-1] for c in self.printer.sudo.calls if c[0] == "install" and "cfg_with" in c[-1]]
+        self.assertEqual(sorted(os.path.basename(w) for w in written), ["cfg_with_1", "cfg_with_2", "cfg_with_3",
+                                                                       "cfg_with_4"])
+        self.assertIn("    _GREASE_BOX_PRINT_CHECK\n    {% endif %}\n    AUTOTUNE_SHAPERS\n",
+                      self.printer.text("gcode_macro.cfg"))
+        self.assertEqual(self.printer.text("plus4-grease-box-lock.cfg"), edits.BOX_LOCK_CFG)
+        self.assertEqual(self.printer.text("plus4-grease-box-dry-settings.cfg"), edits.BOX_SETTINGS_CFG)
+        applied = core.load_state(self.printer.paths)["applied"]
+        for feature_id in ("box_dry", "box_dry_print_start", "box_dry_lock"):
+            self.assertIn(feature_id, applied)
+        self.printer.lines = []
+        core.status(self.printer.paths, self.printer.report)
+        self.assertTrue(any(line.startswith("  applied    Box drying") and line.endswith(
+            "\n             PLA/TPU drying off in plus4-grease-box-dry-settings.cfg (GREASE_BOX_DRY_SETTINGS "
+            "shows all the settings)") for line in self.printer.lines))
+        core.uninstall(self.printer.paths, FakeKlipper(), self.printer.report)
+        for name in STOCK:
+            self.assertEqual(self.printer.text(name), stock_text(name), name)
+        for name in ("plus4-grease-box-dry.cfg", "plus4-grease-box-lock.cfg", "plus4-grease-box-dry-settings.cfg"):
+            self.assertFalse(self.printer.has(name), name)
+
+    def test_box_dry_pla_turns_pla_drying_on(self):
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, options=["box-dry", "box-dry-pla"])
+        self.assertIn(edits.PLA_ON, self.printer.text("plus4-grease-box-dry-settings.cfg"))
+        core.uninstall(self.printer.paths, FakeKlipper(), self.printer.report)
+        self.assertFalse(self.printer.has("plus4-grease-box-dry-settings.cfg"))
+
+    def test_box_dry_pla_later_switches_it_on_and_restarts(self):
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, options=["box-dry"])
+        klipper = FakeKlipper()
+        self.printer.lines = []
+        core.install(self.printer.paths, klipper, self.printer.report, options=["box-dry", "box-dry-pla"])
+        self.assertIn(edits.PLA_ON, self.printer.text("plus4-grease-box-dry-settings.cfg"))
+        self.assertIn("Turned PLA/TPU drying on in plus4-grease-box-dry-settings.cfg.", self.printer.lines)
+        self.assertEqual(klipper.restarts, 1)
+        self.printer.lines = []
+        core.install(self.printer.paths, klipper, self.printer.report, options=["box-dry", "box-dry-pla"])
+        self.assertIn("Nothing to change.", self.printer.lines)
+
+    def test_your_settings_are_never_overwritten_and_kept_on_uninstall(self):
+        mine = edits.BOX_SETTINGS_CFG.replace("variable_unlock_temp: 35", "variable_unlock_temp: 40")
+        with open(self.printer.paths.config_file("plus4-grease-box-dry-settings.cfg"), "w") as handle:
+            handle.write(mine)
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, options=["box-dry"])
+        self.assertEqual(self.printer.text("plus4-grease-box-dry-settings.cfg"), mine)
+        core.uninstall(self.printer.paths, FakeKlipper(), self.printer.report)
+        self.assertEqual(self.printer.text("plus4-grease-box-dry-settings.cfg"), mine)
+        self.assertTrue(any(line.startswith("  kept       plus4-grease-box-dry-settings.cfg")
+                            for line in self.printer.lines))
+
+    def test_box_dry_pla_leaves_a_settings_file_it_cant_read(self):
+        mine = edits.BOX_SETTINGS_CFG.replace(edits.PLA_OFF, "variable_pla_drying: 0\n")
+        with open(self.printer.paths.config_file("plus4-grease-box-dry-settings.cfg"), "w") as handle:
+            handle.write(mine)
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, options=["box-dry", "box-dry-pla"])
+        self.assertEqual(self.printer.text("plus4-grease-box-dry-settings.cfg"), mine)
+        self.assertTrue(any("Set variable_pla_drying: True there yourself." in line for line in self.printer.lines))
+
+    def test_update_from_0_12_brings_the_new_parts_without_asking_again(self):
+        feature = by_id("box_dry")
+        printer_cfg = stock_text("printer.cfg")
+        texts = {"printer.cfg": printer_cfg}
+        core.apply_feature(texts, feature)
+        with open(self.printer.paths.config_file("printer.cfg"), "w", newline="") as handle:
+            handle.write(texts["printer.cfg"])
+        old = feature.files[0][1].split("[gcode_macro _GREASE_BOX_LOCKED]")[0]
+        with open(self.printer.paths.config_file("plus4-grease-box-dry.cfg"), "w", newline="") as handle:
+            handle.write(old)
+        older = feature.replaces + (("plus4-grease-box-dry.cfg", hashlib.sha256(old.encode("utf-8")).hexdigest()),)
+        with mock.patch.object(core, "FEATURES", [f._replace(replaces=older) if f.id == "box_dry" else f
+                                                  for f in core.FEATURES]):
+            core.install(self.printer.paths, FakeKlipper(), self.printer.report)
+        self.assertEqual(self.printer.text("plus4-grease-box-dry.cfg"), feature.files[0][1])
+        self.assertTrue(self.printer.has("plus4-grease-box-lock.cfg"))
+        self.assertTrue(self.printer.has("plus4-grease-box-dry-settings.cfg"))
+        self.assertIn("_GREASE_BOX_PRINT_CHECK", self.printer.text("gcode_macro.cfg"))
+        self.assertIn("plus4-grease-box-loc[k].cfg", self.printer.text("~/cfg_with_2"))
+
+    def test_0_12s_file_is_one_box_dry_updates(self):
+        self.assertIn(("plus4-grease-box-dry.cfg", "4062df48c530b28ed10d0eb1f9e536f8a19bc5cf06773b1febcfc8530a62dfe0"),
+                      by_id("box_dry").replaces)
+
+    def test_no_box_skips_only_the_lock(self):
+        with open(NO_BOX) as source, open(self.printer.paths.config_file("box.cfg"), "w") as handle:
+            handle.write(source.read())
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, options=["box-dry"])
+        applied = core.load_state(self.printer.paths)["applied"]
+        self.assertIn("box_dry", applied)
+        self.assertIn("box_dry_print_start", applied)
+        self.assertNotIn("box_dry_lock", applied)
+        self.assertFalse(self.printer.has("plus4-grease-box-lock.cfg"))
+        self.assertEqual(self.printer.text("~/cfg_with_1"), stock_text("~/cfg_with_1"))
+        self.assertTrue(any(line.startswith("  skipped    Box cool-down lock") for line in self.printer.lines))
+
+    def test_without_box_drying_its_parts_are_skipped_too(self):
+        changed = stock_text("printer.cfg").replace("[include KAMP_Settings.cfg]\n[include box.cfg]\n",
+                                                    "[include box.cfg]\n[include KAMP_Settings.cfg]\n")
+        with open(self.printer.paths.config_file("printer.cfg"), "w", newline="") as handle:
+            handle.write(changed)
+        core.install(self.printer.paths, FakeKlipper(), self.printer.report, options=["box-dry"])
+        for name in ("gcode_macro.cfg", "box.cfg", "~/cfg_with_1"):
+            self.assertNotIn("_GREASE_BOX", self.printer.text(name).replace("plus4-grease", ""), name)
+        self.assertNotIn("box-loc", self.printer.text("box.cfg"))
+        self.assertTrue(any("This works with \"Box drying" in line for line in self.printer.lines))
+        self.assertFalse(self.printer.has("plus4-grease-box-dry-settings.cfg"))
+
+    def test_a_template_sudo_cant_write_puts_everything_back(self):
+        system.install(self.printer.paths, self.printer.report)  # the USB log is already there
+        self.printer.sudo.fail_targets = {"cfg_with_3"}
+        with self.assertRaises(GreaseError) as caught:
+            core.install(self.printer.paths, FakeKlipper(), self.printer.report, options=["box-dry"])
+        self.assertIn("put back", str(caught.exception))
+        for name in STOCK:
+            self.assertEqual(self.printer.text(name), stock_text(name), name)
+        for name in ("plus4-grease-box-dry.cfg", "plus4-grease-box-lock.cfg", "plus4-grease-box-dry-settings.cfg"):
+            self.assertFalse(self.printer.has(name), name)
+
+    def test_klipper_failing_puts_the_templates_back(self):
+        with self.assertRaises(GreaseError):
+            core.install(self.printer.paths, FakeKlipper(ready=False), self.printer.report, options=["box-dry"])
+        for name in STOCK:
+            self.assertEqual(self.printer.text(name), stock_text(name), name)
+        self.assertFalse(self.printer.has("plus4-grease-box-dry-settings.cfg"))
+
+    def test_lock_is_left_out_where_klipper_lacks_a_qidi_command(self):
+        for have in (QIDI_COMMANDS - {"E_BOX"}, None):
+            printer = Printer()
+            try:
+                core.install(printer.paths, FakeKlipper(commands=have), printer.report, options=["box-dry"])
+                applied = core.load_state(printer.paths)["applied"]
+                self.assertIn("box_dry", applied)
+                self.assertNotIn("box_dry_lock", applied)
+                self.assertFalse(printer.has("plus4-grease-box-lock.cfg"))
+                self.assertEqual(printer.text("box.cfg"), stock_text("box.cfg"))
+                self.assertTrue(any("left out" in line for line in printer.lines))
+            finally:
+                printer.cleanup()
+
+    def test_klipper_commands_come_from_the_gcode_object(self):
+        from grease.klipper import Klipper
+
+        class Moonraker(Klipper):
+            def _get(self, path):
+                # QIDI's E_LOAD has no help text, so it's in the gcode object's list but not in gcode/help.
+                assert path == "/printer/objects/query?gcode=commands", path
+                return {"status": {"gcode": {"commands": {"E_LOAD": {}, "e_box": {}, "M104": {"help": "x"}}}}}
+
+        self.assertEqual(Moonraker().commands(), {"E_LOAD", "E_BOX", "M104"})
+
     def test_box_dry_replaces_the_real_0_9_0_file(self):
         here = os.path.dirname(os.path.abspath(__file__))
         feature = next(f for f in core.FEATURES if f.id == "box_dry")
@@ -599,11 +778,17 @@ class PrinterCheckTests(unittest.TestCase):
 
 class OlderStockTests(unittest.TestCase):
     """QIDI didn't publish 1.8.1 or 1.8.2. Its published 1.7.1 configs came before them, and every edit has to
-    find the same stock text there as in V2.1.1."""
+    find the same stock text there as in V2.1.1. Those configs don't include the Box templates, so the Box
+    lock (box.cfg and ~/cfg_with_N) is only checked against V2.1.1's."""
+
+    FILES = ("printer.cfg", "gcode_macro.cfg")
+
+    def features(self):
+        return [f for f in FEATURES if all(e.file in self.FILES for e in f.edits)]
 
     def texts(self):
         texts = {}
-        for name in ("printer.cfg", "gcode_macro.cfg"):
+        for name in self.FILES:
             with open(os.path.join(HERE, "..", "stock", "plus4-1.7.1", name), "r", encoding="utf-8",
                       newline="") as handle:
                 texts[name] = handle.read()
@@ -611,12 +796,13 @@ class OlderStockTests(unittest.TestCase):
 
     def test_every_change_is_available_on_stock_1_7_1(self):
         texts = self.texts()
-        for feature in FEATURES:
+        self.assertEqual([f.id for f in FEATURES if f not in self.features()], ["box_dry_lock"])
+        for feature in self.features():
             self.assertEqual(core.feature_status(texts, feature), "available", feature.id)
 
     def test_every_change_applies_and_reverts_on_stock_1_7_1(self):
         original = self.texts()
-        for feature in FEATURES:
+        for feature in self.features():
             texts = dict(original)
             core.apply_feature(texts, feature)
             self.assertEqual(core.feature_status(texts, feature), "applied", feature.id)

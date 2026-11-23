@@ -26,7 +26,9 @@ def main(argv=None):
                           "thermistor (max_power 0.6, max_temp 80, no 45-65 C target range or bed assist)")
     run.add_argument("--box-dry", action="store_true",
                      help="also add Box drying with a timer and humidity control (GREASE_BOX_DRY), used by the "
-                          "new Fluidd's Box card")
+                          "new Fluidd's Box card, and the cool-down lock for PLA and TPU")
+    run.add_argument("--box-dry-pla", action="store_true",
+                     help="--box-dry, with PLA and TPU drying turned on in plus4-grease-box-dry-settings.cfg")
     run.add_argument("--any-firmware", action="store_true", help=argparse.SUPPRESS)
     sub.add_parser("uninstall", help="put QIDI's stock text back")
     sub.add_parser("status", help="show what's applied")
@@ -72,7 +74,8 @@ def main(argv=None):
         if args.command == "install":
             options = [name for name, chosen in (("board-fan", args.board_fan),
                                                  ("balanced-chamber", args.balanced_chamber),
-                                                 ("box-dry", args.box_dry)) if chosen]
+                                                 ("box-dry", args.box_dry or args.box_dry_pla),
+                                                 ("box-dry-pla", args.box_dry_pla)) if chosen]
             return install(paths, Klipper(), report, dry_run=args.dry_run, replace_own=args.replace_own_speeds,
                            options=options)
         result = uninstall(paths, Klipper(), report)

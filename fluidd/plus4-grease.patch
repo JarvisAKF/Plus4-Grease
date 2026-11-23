@@ -1,9 +1,9 @@
 diff --git a/src/components/widgets/qidiBox/QidiBoxCard.vue b/src/components/widgets/qidiBox/QidiBoxCard.vue
 new file mode 100644
-index 0000000..6f5727d
+index 0000000..2fc1887
 --- /dev/null
 +++ b/src/components/widgets/qidiBox/QidiBoxCard.vue
-@@ -0,0 +1,637 @@
+@@ -0,0 +1,669 @@
 +<template>
 +  <collapsable-card
 +    :title="$t('app.qidi_box.title.qidi_box')"
@@ -237,6 +237,19 @@ index 0000000..6f5727d
 +        </div>
 +
 +        <div
++          v-if="currentLocked"
++          class="text-caption amber--text mt-2 d-flex align-center"
++        >
++          <v-icon
++            x-small
++            class="mr-1 amber--text"
++          >
++            $snowflake
++          </v-icon>
++          {{ $t('app.qidi_box.msg.plus4_load_locked', { box: currentBox }) }}
++        </div>
++
++        <div
 +          v-for="limit in (canDry ? [] : heaterLimits)"
 +          :key="`limit:${limit.box}`"
 +          class="text-caption text--secondary mt-2 d-flex align-center"
@@ -265,7 +278,7 @@ index 0000000..6f5727d
 +          :class="{ 'mt-4': box > 1 }"
 +          :box="box"
 +          :box-count="boxCount"
-+          :limit="heaterLimit(box)"
++          :limits="boxLimits(box)"
 +          :can-dry="canDry"
 +        />
 +      </div>
@@ -303,6 +316,7 @@ index 0000000..6f5727d
 +  qidiBoxSlotLabel
 +} from '@/util/qidi-box'
 +import { QIDI_BOX_STEP_UNKNOWN, type QidiBoxError, type QidiBoxStepText } from '@/util/qidi-box-task'
++import { qidiBoxCooling, qidiBoxDrySettings } from '@/util/qidi-box-dry'
 +import QidiBoxFlow from './QidiBoxFlow.vue'
 +import QidiBoxSettingsDialog from './QidiBoxSettingsDialog.vue'
 +import QidiBoxDry from './QidiBoxDry.vue'
@@ -508,8 +522,25 @@ index 0000000..6f5727d
 +    this.sendGcode('TRY_MOVE_AGAIN', Waits.onQidiBoxCommand)
 +  }
 +
-+  heaterLimit (box: number): number | null {
-+    return this.$typedGetters['qidiBox/getHeaterLimit'](box)
++  boxLimits (box: number): number[] {
++    return this.$typedGetters['qidiBox/getHeaterLimits'](box)
++  }
++
++  get currentBox (): number {
++    return Math.floor(this.current.index / 4) + 1
++  }
++
++  // Plus4 Grease's --box-dry puts a cool-down lock in front of E_LOAD, E_BOX and EXTRUDER_LOAD (it renames QIDI's
++  // to _GREASE_QIDI_*): PLA or TPU isn't moved through a Box's feed tubes while they're still warm from its heater.
++  get currentLocked (): boolean {
++    if (!('_GREASE_QIDI_E_LOAD' in this.$typedGetters['printer/getAvailableCommands'])) return false
++    if (this.currentExternal || !this.current.present || this.current.boxMaxTemp !== 0) return false
++
++    const printer = this.$typedState.printer.printer
++    const settings = qidiBoxDrySettings(printer['gcode_macro _GREASE_BOX_DRY_SETTINGS'])
++
++    return qidiBoxCooling(printer[`gcode_macro _GREASE_BOX_DRY_${this.currentBox}`],
++      printer[`heater_generic heater_box${this.currentBox}`]?.temperature, settings).locked
 +  }
 +
 +  // QIDI lets a Box heater go no higher than the lowest Box limit of the filaments loaded in that Box; 0 locks it.
@@ -563,6 +594,7 @@ index 0000000..6f5727d
 +
 +    const loaded = this.hub === 0 && this.lastLoadSlot === this.current.index
 +
++    if ((action === LOAD || action === EJECT) && this.currentLocked) return true
 +    if (action === LOAD) return loaded
 +    if (action === UNLOAD) return !loaded
 +
@@ -643,10 +675,10 @@ index 0000000..6f5727d
 +</style>
 diff --git a/src/components/widgets/qidiBox/QidiBoxDry.vue b/src/components/widgets/qidiBox/QidiBoxDry.vue
 new file mode 100644
-index 0000000..ed126a5
+index 0000000..c718917
 --- /dev/null
 +++ b/src/components/widgets/qidiBox/QidiBoxDry.vue
-@@ -0,0 +1,249 @@
+@@ -0,0 +1,298 @@
 +<template>
 +  <div class="qidi-box-dry">
 +    <div class="d-flex align-center text-overline text--secondary">
@@ -704,10 +736,17 @@ index 0000000..ed126a5
 +    <template v-else-if="!canDry" />
 +
 +    <div
-+      v-else-if="limit === 0"
++      v-else-if="maxTemp === 0"
 +      class="text-caption text--secondary"
 +    >
-+      {{ $t('app.qidi_box.msg.plus4_heater_locked', { box }) }}
++      {{ $t('app.qidi_box.dry.pla_off') }}
++    </div>
++
++    <div
++      v-else-if="hasPla && printing"
++      class="text-caption text--secondary"
++    >
++      {{ $t('app.qidi_box.dry.pla_printing') }}
 +    </div>
 +
 +    <v-form
@@ -766,10 +805,25 @@ index 0000000..ed126a5
 +    </v-form>
 +
 +    <div
-+      v-if="canDry && !active && !qidiDrying && limit !== 0"
++      v-if="canDry && !active && !qidiDrying && maxTemp !== 0 && !(hasPla && printing)"
 +      class="text-caption text--disabled mt-1"
 +    >
-+      {{ $t('app.qidi_box.dry.help', { max: maxTemp }) }}
++      {{ hasPla
++        ? $t('app.qidi_box.dry.help_pla', { max: maxTemp, unlock: settings.unlockTemp, minutes: settings.coolMinutes })
++        : $t('app.qidi_box.dry.help', { max: maxTemp }) }}
++    </div>
++
++    <div
++      v-if="canDry && hasPla && cooling.locked"
++      class="text-caption amber--text mt-1 d-flex align-center"
++    >
++      <v-icon
++        x-small
++        class="mr-1 amber--text"
++      >
++        $snowflake
++      </v-icon>
++      {{ coolingText }}
 +    </div>
 +  </div>
 +</template>
@@ -778,19 +832,19 @@ index 0000000..ed126a5
 +// Plus4 Grease: drying for one QIDI Box, through GREASE_BOX_DRY and GREASE_BOX_DRY_STOP from the Plus4 Grease
 +// --box-dry config (grease/plus4-grease-box-dry.cfg). Klipper keeps the timer and the humidity control, so drying
 +// carries on with this page closed. The macro enforces QIDI's filament limit itself; this form only suggests it.
++// With pla_drying on in plus4-grease-box-dry-settings.cfg, PLA and TPU dry too (never during a print), and a Box holding
++// them then stays locked for loading them until it has cooled; this shows that cool-down.
 +import { Component, Mixins, Prop, Watch } from 'vue-property-decorator'
 +import StateMixin from '@/mixins/state'
-+
-+interface DryState {
-+  active?: number;
-+  temp?: number;
-+  minutes_left?: number;
-+  humidity?: number;
-+  heating?: number;
-+}
-+
-+// An empty Box: the macro caps it at the highest filament limit in QIDI's list.
-+const EMPTY_LIMIT = 65
++import {
++  QIDI_BOX_EMPTY_LIMIT,
++  qidiBoxCooling,
++  qidiBoxDryLimit,
++  qidiBoxDrySettings,
++  type QidiBoxCooling,
++  type QidiBoxDrySettings,
++  type QidiBoxDryState
++} from '@/util/qidi-box-dry'
 +
 +@Component({})
 +export default class QidiBoxDry extends Mixins(StateMixin) {
@@ -804,9 +858,9 @@ index 0000000..ed126a5
 +  @Prop({ type: Boolean, default: true })
 +  readonly canDry!: boolean
 +
-+  // QIDI's Box heater limit for the filaments loaded; null when unknown.
-+  @Prop({ type: Number, default: null })
-+  readonly limit!: number | null
++  // QIDI's Box heater limits of the filaments loaded (0 for PLA and TPU); empty when none is known.
++  @Prop({ type: Array, default: () => [] })
++  readonly limits!: number[]
 +
 +  valid = true
 +  temp = 0
@@ -817,12 +871,38 @@ index 0000000..ed126a5
 +    return `onQidiBoxDry${this.box}`
 +  }
 +
-+  get maxTemp (): number {
-+    return this.limit ?? EMPTY_LIMIT
++  get settings (): QidiBoxDrySettings {
++    return qidiBoxDrySettings(this.$typedState.printer.printer['gcode_macro _GREASE_BOX_DRY_SETTINGS'])
 +  }
 +
-+  get state (): DryState {
++  get hasPla (): boolean {
++    return this.limits.includes(0)
++  }
++
++  get maxTemp (): number {
++    return qidiBoxDryLimit(this.limits, this.settings) ?? QIDI_BOX_EMPTY_LIMIT
++  }
++
++  get printing (): boolean {
++    return ['printing', 'paused'].includes(this.$typedState.printer.printer.print_stats?.state ?? '')
++  }
++
++  get state (): QidiBoxDryState {
 +    return this.$typedState.printer.printer[`gcode_macro _GREASE_BOX_DRY_${this.box}`] ?? {}
++  }
++
++  get cooling (): QidiBoxCooling {
++    return qidiBoxCooling(this.state, this.$typedState.printer.printer[`heater_generic heater_box${this.box}`]?.temperature,
++      this.settings)
++  }
++
++  get coolingText (): string {
++    const { minutes, temperature, unlockTemp } = this.cooling
++    const temp = temperature ?? '?'
++
++    return minutes > 0
++      ? this.$t('app.qidi_box.dry.cooling_time', { temp, unlock: unlockTemp, minutes }).toString()
++      : this.$t('app.qidi_box.dry.cooling_temp', { temp, unlock: unlockTemp }).toString()
 +  }
 +
 +  get active (): boolean {
@@ -860,6 +940,7 @@ index 0000000..ed126a5
 +    ]
 +
 +    if (humidity) parts.push(this.$t('app.qidi_box.dry.keeping', { humidity }).toString())
++    if (Number(this.state.pla) === 1) parts.push(this.$t('app.qidi_box.dry.status_pla').toString())
 +
 +    return parts.join(' · ')
 +  }
@@ -870,7 +951,7 @@ index 0000000..ed126a5
 +  }
 +
 +  start () {
-+    if (!this.valid || this.active || this.qidiDrying) return
++    if (!this.valid || this.active || this.qidiDrying || this.maxTemp === 0 || (this.hasPla && this.printing)) return
 +
 +    this.sendGcode(
 +      `GREASE_BOX_DRY BOX=${this.box} TEMP=${Math.round(this.temp)} HOURS=${this.hours} HUMIDITY=${Math.round(this.humidity)}`,
@@ -2481,10 +2562,10 @@ index ed39791..d4b391b 100644
  
  export const SupportedLocales = Object.freeze([
 diff --git a/src/locales/en.yaml b/src/locales/en.yaml
-index 217e550..e6f18fa 100644
+index 217e550..abdda2c 100644
 --- a/src/locales/en.yaml
 +++ b/src/locales/en.yaml
-@@ -1456,6 +1456,245 @@ app:
+@@ -1456,6 +1456,252 @@ app:
        show_logos: Show Logos
        show_climate: Show Climate Info
        show_unavailable_spool_color: Show Unavailable Spools
@@ -2590,6 +2671,7 @@ index 217e550..e6f18fa 100644
 +      plus4_retry_help: Retry runs the failed Box step again, as the touchscreen's Retry does.
 +      plus4_heater_limit: Box {box} heater up to {temp}°C, the lowest Box limit of the filaments loaded in it.
 +      plus4_heater_locked: Box {box} heater locked at 0°C. A filament loaded in it can't be heated in the Box (QIDI's limit; PLA and TPU are 0).
++      plus4_load_locked: "Load and Eject wait while Box {box} cools after heating: PLA or TPU softens in the warm feed tubes and can jam. Drying, below, shows how long."
 +      loaded: Loaded %{slot}
 +      missing_slot: >-
 +        Choose a Box slot for every filament, or turn off the QIDI Box to print
@@ -2687,6 +2769,12 @@ index 217e550..e6f18fa 100644
 +    dry:
 +      qidi_running: "Drying from the touchscreen at {temp}°C (QIDI's timer)"
 +      help: "Up to {max}°C for the filaments loaded. Hours 0 runs until stopped. Humidity 0 is off; otherwise the heater goes off at or below it and back on 5 points above it."
++      help_pla: "Up to {max}°C with PLA or TPU in this Box; unload this Box's filament from the toolhead first. Afterwards PLA and TPU load once the Box is at or below {unlock}°C and {minutes} min after the heater stops."
++      pla_off: "PLA or TPU is in this Box. QIDI doesn't heat it, as it softens in the warm feed tubes and can jam. Plus4 Grease can dry it and then hold loads until the Box cools: set variable_pla_drying: True in plus4-grease-box-dry-settings.cfg."
++      pla_printing: PLA or TPU is in this Box, so it's only dried while nothing is printing.
++      cooling_time: "Cooling after heating: {temp}°C now. PLA and TPU load at or below {unlock}°C, in about {minutes} min."
++      cooling_temp: "Cooling after heating: {temp}°C now. PLA and TPU load once it's at or below {unlock}°C."
++      status_pla: PLA and TPU stay locked for loading until the Box cools
 +      hours: Hours
 +      hours_hint: 0 runs until stopped
 +      humidity: Humidity
@@ -2884,10 +2972,10 @@ index 0000000..063ff4f
 +} satisfies ActionTree<QidiBoxState, RootState>
 diff --git a/src/store/qidiBox/getters.ts b/src/store/qidiBox/getters.ts
 new file mode 100644
-index 0000000..b7f24df
+index 0000000..fe33286
 --- /dev/null
 +++ b/src/store/qidiBox/getters.ts
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,175 @@
 +import type { GetterTree } from 'vuex'
 +import type { QidiBoxState } from './types'
 +import type { RootState } from '../types'
@@ -2941,12 +3029,17 @@ index 0000000..b7f24df
 +  // Box N's heater may not exceed the lowest Box temperature limit among its loaded filaments, as on the
 +  // touchscreen; a limit of 0 forbids heating. Null when no loaded filament has a known limit.
 +  getHeaterLimit: (state, getters) => (box: number): number | null => {
-+    const limits = (getters.getSlots as QidiBoxSlot[])
++    const limits = getters.getHeaterLimits(box) as number[]
++
++    return limits.length ? Math.min(...limits) : null
++  },
++
++  // The known Box limits of the filaments loaded in Box N.
++  getHeaterLimits: (state, getters) => (box: number): number[] => {
++    return (getters.getSlots as QidiBoxSlot[])
 +      .filter(slot => slot.index !== QIDI_BOX_EXTERNAL_SLOT && Math.floor(slot.index / 4) === box - 1 && slot.present)
 +      .map(slot => slot.boxMaxTemp)
 +      .filter((limit): limit is number => limit != null)
-+
-+    return limits.length ? Math.min(...limits) : null
 +  },
 +
 +  // value_tN maps tool N to the slot it loads.
@@ -3331,6 +3424,64 @@ index 0000000..0dc0f77
 +        expect(shown).toEqual([0, ...Array.from({ length: count }, (_, i) => i + 1)])
 +      }
 +    }
++  })
++})
+diff --git a/src/util/__tests__/qidi-box-plus4-dry.spec.ts b/src/util/__tests__/qidi-box-plus4-dry.spec.ts
+new file mode 100644
+index 0000000..55b82b6
+--- /dev/null
++++ b/src/util/__tests__/qidi-box-plus4-dry.spec.ts
+@@ -0,0 +1,52 @@
++import { describe, expect, it } from 'vitest'
++import { qidiBoxCooling, qidiBoxDryLimit, qidiBoxDrySettings } from '../qidi-box-dry'
++
++// Plus4 Grease: the card follows plus4-grease-box-dry.cfg's settings, heater limit and cool-down lock.
++describe('Plus 4 Box drying settings', () => {
++  it('uses the defaults without a settings macro (an install from before 0.13)', () => {
++    expect(qidiBoxDrySettings(undefined)).toEqual({
++      plaDrying: false, plaMaxTemp: 45, unlockTemp: 35, coolMinutes: 30, printStart: 'wait'
++    })
++  })
++
++  it('reads the macro variables as Moonraker sends them and keeps them in range', () => {
++    expect(qidiBoxDrySettings({ pla_drying: true, pla_max_temp: 90, unlock_temp: 5, cool_minutes: 500, print_start: 'cancel' }))
++      .toEqual({ plaDrying: true, plaMaxTemp: 50, unlockTemp: 30, coolMinutes: 120, printStart: 'cancel' })
++    expect(qidiBoxDrySettings({ pla_drying: 'no', pla_max_temp: 'x', print_start: 'later' }))
++      .toMatchObject({ plaDrying: false, plaMaxTemp: 35, printStart: 'wait' })
++  })
++})
++
++describe('Plus 4 Box drying limit', () => {
++  const off = qidiBoxDrySettings({})
++  const on = qidiBoxDrySettings({ pla_drying: true })
++
++  it('is the lowest limit of the filaments in the Box', () => {
++    expect(qidiBoxDryLimit([45, 65], off)).toBe(45)
++    expect(qidiBoxDryLimit([], off)).toBeNull()
++  })
++
++  it('is 0 with PLA or TPU in the Box unless PLA/TPU drying is on', () => {
++    expect(qidiBoxDryLimit([0, 45], off)).toBe(0)
++    expect(qidiBoxDryLimit([0, 65], on)).toBe(45)
++    expect(qidiBoxDryLimit([0], qidiBoxDrySettings({ pla_drying: true, pla_max_temp: 50 }))).toBe(50)
++    expect(qidiBoxDryLimit([0, 45], qidiBoxDrySettings({ pla_drying: true, pla_max_temp: 50 }))).toBe(45)
++  })
++})
++
++describe('Plus 4 Box cool-down lock', () => {
++  const settings = qidiBoxDrySettings({})
++
++  it('locks while minutes are left, or while above unlock_temp after heating', () => {
++    expect(qidiBoxCooling({ cool_left: 12, hot: 1 }, 41.2, settings)).toEqual({
++      locked: true, minutes: 12, temperature: 41, unlockTemp: 35
++    })
++    expect(qidiBoxCooling({ cool_left: 0, hot: 1 }, 36, settings).locked).toBe(true)
++    expect(qidiBoxCooling({ cool_left: 0, hot: 1 }, 35, settings).locked).toBe(false)
++  })
++
++  it("doesn't lock a warm Box that wasn't heated", () => {
++    expect(qidiBoxCooling({ cool_left: 0, hot: 0 }, 38, settings).locked).toBe(false)
++    expect(qidiBoxCooling(undefined, 50, settings).locked).toBe(false)
 +  })
 +})
 diff --git a/src/util/__tests__/qidi-box-plus4-limits.spec.ts b/src/util/__tests__/qidi-box-plus4-limits.spec.ts
@@ -3919,6 +4070,97 @@ index 0000000..4b4c533
 +    expect(qidiBoxToolButtons({ 0: 0, 1: 1 }, slots, null, 1).some(button => button.active)).toBe(false)
 +  })
 +})
+diff --git a/src/util/qidi-box-dry.ts b/src/util/qidi-box-dry.ts
+new file mode 100644
+index 0000000..c23735d
+--- /dev/null
++++ b/src/util/qidi-box-dry.ts
+@@ -0,0 +1,85 @@
++// Plus4 Grease: the Box drying settings and the cool-down lock, worked out the way plus4-grease-box-dry.cfg works
++// them out, so the card shows what the macros will do. The macros decide; this only follows them.
++
++export interface QidiBoxDrySettings {
++  plaDrying: boolean;
++  plaMaxTemp: number;
++  unlockTemp: number;
++  coolMinutes: number;
++  printStart: 'wait' | 'cancel';
++}
++
++export interface QidiBoxDryState {
++  active?: number;
++  temp?: number;
++  minutes_left?: number;
++  humidity?: number;
++  heating?: number;
++  pla?: number;
++  cool_left?: number;
++  hot?: number;
++}
++
++export interface QidiBoxCooling {
++  locked: boolean;
++  minutes: number;
++  temperature: number | null;
++  unlockTemp: number;
++}
++
++// An empty Box: the macro caps it at the highest filament limit in QIDI's list.
++export const QIDI_BOX_EMPTY_LIMIT = 65
++
++// Jinja's int filter: a number truncated, anything else 0. Then clamped, as the macros do.
++const clamped = (value: unknown, low: number, high: number): number => {
++  const number = Math.trunc(Number(value))
++
++  return Math.min(Math.max(Number.isFinite(number) ? number : 0, low), high)
++}
++
++const DEFAULTS = { pla_drying: false, pla_max_temp: 45, unlock_temp: 35, cool_minutes: 30, print_start: 'wait' }
++
++// The _GREASE_BOX_DRY_SETTINGS macro's variables, from plus4-grease-box-dry-settings.cfg.
++export const qidiBoxDrySettings = (macro?: Record<string, unknown> | null): QidiBoxDrySettings => {
++  const values = { ...DEFAULTS, ...(macro ?? {}) }
++
++  return {
++    plaDrying: ['true', '1', 'yes', 'on'].includes(String(values.pla_drying).toLowerCase()),
++    plaMaxTemp: clamped(values.pla_max_temp, 35, 50),
++    unlockTemp: clamped(values.unlock_temp, 30, 45),
++    coolMinutes: clamped(values.cool_minutes, 10, 120),
++    printStart: String(values.print_start).toLowerCase() === 'cancel' ? 'cancel' : 'wait'
++  }
++}
++
++// GREASE_BOX_DRY's heater limit for one Box, from QIDI's Box limits of the filaments in it: the lowest; with PLA or
++// TPU in it (QIDI's 0), 0 unless PLA/TPU drying is on, and then no more than pla_max_temp. Null when none is known.
++export const qidiBoxDryLimit = (limits: number[], settings: QidiBoxDrySettings): number | null => {
++  if (!limits.length) return null
++
++  const others = limits.filter(limit => limit > 0)
++  const highest = others.length ? Math.min(...others) : QIDI_BOX_EMPTY_LIMIT
++
++  if (!limits.includes(0)) return highest
++
++  return settings.plaDrying ? Math.min(highest, settings.plaMaxTemp) : 0
++}
++
++// A Box holding PLA or TPU is locked for loading them while minutes of its cool-down are left, or while it is above
++// unlock_temp after heating (hot).
++export const qidiBoxCooling = (
++  state: QidiBoxDryState | null | undefined,
++  temperature: number | null | undefined,
++  settings: QidiBoxDrySettings
++): QidiBoxCooling => {
++  const minutes = Math.max(0, Math.trunc(Number(state?.cool_left ?? 0)) || 0)
++  const hot = Number(state?.hot ?? 0) === 1
++  const known = temperature != null && Number.isFinite(temperature)
++
++  return {
++    locked: minutes > 0 || (hot && known && (temperature as number) > settings.unlockTemp),
++    minutes,
++    temperature: known ? Math.round(temperature as number) : null,
++    unlockTemp: settings.unlockTemp
++  }
++}
 diff --git a/src/util/qidi-box-flow.ts b/src/util/qidi-box-flow.ts
 new file mode 100644
 index 0000000..a2cb40a

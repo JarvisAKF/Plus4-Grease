@@ -94,6 +94,31 @@ def _sudo(runner, *command):
     return done.returncode == 0, (done.stdout or "").strip()
 
 
+def write_owned(path, text, scratch, runner=None):
+    """Write a file only root can change (QIDI's Box templates), keeping its owner and mode."""
+    try:
+        info = os.stat(path)
+        mode, owner, group = "{:04o}".format(info.st_mode & 0o7777), str(info.st_uid), str(info.st_gid)
+    except FileNotFoundError:
+        mode, owner, group = "0644", "root", "root"
+    os.makedirs(scratch, exist_ok=True)
+    handle, temp = tempfile.mkstemp(dir=scratch)
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8", newline="") as out:
+            out.write(text)
+        ok, output = _sudo(runner, "install", "-m", mode, "-o", owner, "-g", group, temp, path)
+    finally:
+        os.unlink(temp)
+    if not ok:
+        raise OSError("couldn't write {}: {}".format(path, output))
+
+
+def remove_owned(path, runner=None):
+    ok, output = _sudo(runner, "rm", "-f", path)
+    if not ok:
+        raise OSError("couldn't remove {}: {}".format(path, output))
+
+
 def install(paths, report, runner=None):
     """Copies the script and the rule into place with sudo, reloads udev, and writes a first line."""
     os.makedirs(paths.state_dir, exist_ok=True)

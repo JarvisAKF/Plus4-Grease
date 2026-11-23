@@ -168,8 +168,9 @@ def undo_grease(texts, config):
     taken = []
     texts = dict(texts)
     for name in core.touched(core.FEATURES):
-        if name not in texts and os.path.isfile(paths.config_file(name)):
-            texts[name] = read(paths.config_file(name))
+        path = paths.file(name) if hasattr(paths, "file") else paths.config_file(name)
+        if name not in texts and os.path.isfile(path):
+            texts[name] = read(path)
     for feature in core.FEATURES:
         current = core.effective(feature, state)
         if all(edit.file in texts for edit in current.edits) and core.feature_status(texts, current) == "applied":

@@ -30,15 +30,16 @@ from . import system
 from .core import GreaseError
 
 FLUIDD_VERSION = "v1.38.1"
-BUILD = 9  # Plus4 Grease's own build number for this Fluidd version; 2 added the QIDI Box card, 3 its buttons,
+BUILD = 10  # Plus4 Grease's own build number for this Fluidd version; 2 added the QIDI Box card, 3 its buttons,
 #           4 reads the Plus 4's toolhead filament sensor, 5 caps the Box heater and adds Box settings,
 #           6 adds drying (with install --box-dry),
 #           7 calls the drying macros by their 0.9.1 names,
 #           8 adds Edit filament,
-#           9 adds Retry, Box self-check and the touchscreen's drying
+#           9 adds Retry, Box self-check and the touchscreen's drying,
+#           10 adds PLA/TPU drying and shows the Box cool-down lock (0.13.0)
 BUNDLE_VERSION = "{}-{}".format(FLUIDD_VERSION, BUILD)
 BUNDLE_NAME = "plus4-grease-fluidd-{}.zip".format(BUNDLE_VERSION)
-BUNDLE_SHA256 = "b7e8896b91d742d17da43d51e9229036c58bf4e8eff084ba3139a9cc5ff21e99"
+BUNDLE_SHA256 = "17aba9324314241c0613e78412b09ce59a600e261dca417d7989855d06d2f478"
 PORT = 81
 NAMESPACE = "plus4_grease_fluidd"
 QIDI_NAMESPACE = "fluidd"

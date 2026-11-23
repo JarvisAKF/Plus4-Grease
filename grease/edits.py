@@ -20,15 +20,74 @@ Edit = collections.namedtuple("Edit", "file find replace")
 # option: the install switch (--board-fan) that turns on a change left off by default.
 # replaces: ((name, sha256), ...) of files an earlier Plus4 Grease version wrote for this change, which
 # install updates and uninstall removes as its own.
-Feature = collections.namedtuple("Feature", "id title detail source edits setting files option replaces",
-                                 defaults=(None, None, None, None))
+# requires: the id of a feature this one only works with. It's skipped while that one can't be applied.
+# user_files: (UserFile, ...) the feature writes once for the user to edit (settings). They don't count
+# toward the feature's status, install never overwrites them, and uninstall removes one only while it's
+# still one of its default texts.
+# commands: QIDI commands the feature renames (rename_existing). Klipper won't start if one is missing, so
+# install skips the feature when the running Klipper doesn't have them all.
+# A file name starting with ~/ is in the mks home folder, not the config folder: QIDI's root-owned Box
+# templates, which are written with sudo and keep their owner and mode.
+Feature = collections.namedtuple("Feature",
+                                 "id title detail source edits setting files option replaces requires user_files "
+                                 "commands",
+                                 defaults=(None, None, None, None, None, None, None))
 Setting = collections.namedtuple("Setting", "file section option value")
+# settle(text or None, options) -> (new text or None for no change, note or ""). describe(text) -> str.
+UserFile = collections.namedtuple("UserFile", "name defaults settle describe")
 
 PROBE_MOVE_SPEED = 300
+
+
+def _ours(name):
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), name), "r", encoding="utf-8",
+              newline="") as handle:
+        return handle.read()
+
+
 BOX_DRY_FILE = "plus4-grease-box-dry.cfg"
-with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), BOX_DRY_FILE), "r", encoding="utf-8",
-          newline="") as _handle:
-    BOX_DRY_CFG = _handle.read()
+BOX_DRY_CFG = _ours(BOX_DRY_FILE)
+BOX_LOCK_FILE = "plus4-grease-box-lock.cfg"
+BOX_LOCK_CFG = _ours(BOX_LOCK_FILE)
+BOX_SETTINGS_FILE = "plus4-grease-box-dry-settings.cfg"
+BOX_SETTINGS_CFG = _ours(BOX_SETTINGS_FILE)
+PLA_OFF = "variable_pla_drying: False\n"
+PLA_ON = "variable_pla_drying: True\n"
+BOX_TEMPLATES = ("~/cfg_with_1", "~/cfg_with_2", "~/cfg_with_3", "~/cfg_with_4")
+
+
+def _settle_box_settings(text, options):
+    """The settings file: written once (PLA/TPU drying on with --box-dry-pla); afterwards --box-dry-pla
+    only switches pla_drying on."""
+    want_pla = "box-dry-pla" in options
+    if text is None:
+        return (BOX_SETTINGS_CFG.replace(PLA_OFF, PLA_ON) if want_pla else BOX_SETTINGS_CFG,
+                "Wrote your Box drying settings to {} (PLA/TPU drying {}).".format(
+                    BOX_SETTINGS_FILE, "on" if want_pla else "off"))
+    if not want_pla:
+        return None, ""
+    lines = text.splitlines(True)
+    if PLA_ON in lines:
+        return None, ""
+    if lines.count(PLA_OFF) == 1:
+        return text.replace(PLA_OFF, PLA_ON), "Turned PLA/TPU drying on in {}.".format(BOX_SETTINGS_FILE)
+    return None, ("{} has no line 'variable_pla_drying: False' to switch, so it's left as you have it. "
+                  "Set variable_pla_drying: True there yourself.".format(BOX_SETTINGS_FILE))
+
+
+def _describe_box_settings(text):
+    value = "?"
+    for line in text.splitlines():
+        key, _, rest = line.partition(":")
+        if key.strip() == "variable_pla_drying":
+            value = rest.split("#")[0].strip()
+    on = value.lower() in ("true", "1", "yes", "on")
+    return "PLA/TPU drying {} in {} (GREASE_BOX_DRY_SETTINGS shows all the settings)".format(
+        "on" if on else "off", BOX_SETTINGS_FILE)
+
+
+BOX_SETTINGS = UserFile(BOX_SETTINGS_FILE, (BOX_SETTINGS_CFG, BOX_SETTINGS_CFG.replace(PLA_OFF, PLA_ON)),
+                        _settle_box_settings, _describe_box_settings)
 BOARD_FAN_FILE = "plus4-grease-board-fan.cfg"
 BOARD_FAN_CFG = r'''# Plus4 Grease: temperature-driven mainboard fan for the QIDI Plus 4 (install --board-fan).
 # From JarvisAKF's Plus 4, where it has run for over a year. It replaces QIDI's [controller_fan board_fan],
@@ -301,16 +360,19 @@ FEATURES = (
     ),
     Feature(
         id="box_dry",
-        title="Box drying with a timer and humidity control (install --box-dry)",
+        title="Box drying with a timer, humidity control and optional PLA/TPU drying (install --box-dry)",
         detail=(
             "Adds GREASE_BOX_DRY BOX=1 TEMP=45 HOURS=4 HUMIDITY=20 and GREASE_BOX_DRY_STOP BOX=1, which the new "
             "Fluidd's Box card uses. It sets the Box heater (SET_HEATER_TEMPERATURE HEATER=heater_boxN) with "
             "a timer kept by Klipper and, if HUMIDITY is given, switches the heater off at or below that "
             "humidity and back on 5 points above it; QIDI's own ENABLE_BOX_DRY, which the touchscreen uses, "
             "has a timer but no humidity control. It never "
-            "goes above QIDI's Box limit for the filaments loaded (0 for PLA and TPU refuses to heat), refuses "
-            "a loaded filament QIDI's list doesn't name, and stops if the Box heater is changed elsewhere."
-        ),
+            "goes above QIDI's Box limit for the filaments loaded, refuses "
+            "a loaded filament QIDI's list doesn't name, and stops if the Box heater is changed elsewhere. "
+            "QIDI's limit for PLA and TPU is 0; with pla_drying on in {} (install --box-dry-pla turns it on) "
+            "they can be dried up to 45 C, never during a print or with that Box's filament in the toolhead, "
+            "and the Box then stays locked for loading them until it has cooled."
+        ).format(BOX_SETTINGS_FILE),
         source="Plus4 Grease's own, for the Plus 4's Box heater on V2.1.1.",
         edits=(
             Edit(
@@ -329,7 +391,72 @@ FEATURES = (
         ),
         files=((BOX_DRY_FILE, BOX_DRY_CFG),),
         option="box-dry",
-        # 0.9.0's file, whose PLUS4_BOX_DRY macros Klipper couldn't call (it reads that name as PLUS4).
-        replaces=((BOX_DRY_FILE, "2f30602eb7986401a4943e2c86c7dbf3a908330b35eb1ad64a12865870978f5e"),),
+        replaces=(
+            # 0.9.0's file, whose PLUS4_BOX_DRY macros Klipper couldn't call (it reads that name as PLUS4).
+            (BOX_DRY_FILE, "2f30602eb7986401a4943e2c86c7dbf3a908330b35eb1ad64a12865870978f5e"),
+            # 0.9.1 to 0.12.0's, without PLA/TPU drying or the cool-down lock.
+            (BOX_DRY_FILE, "4062df48c530b28ed10d0eb1f9e536f8a19bc5cf06773b1febcfc8530a62dfe0"),
+        ),
+        user_files=(BOX_SETTINGS,),
+    ),
+    Feature(
+        id="box_dry_print_start",
+        title="Box cool-down wait at print start (install --box-dry)",
+        detail=(
+            "Adds _GREASE_BOX_PRINT_CHECK as the first line of PRINT_START. If a Box holding PLA or TPU is "
+            "drying, that stops; if it's still cooling after heating, the print waits for it before anything "
+            "heats (or is cancelled, with print_start: 'cancel' in {}). The line does nothing once Box "
+            "drying is removed."
+        ).format(BOX_SETTINGS_FILE),
+        source="Plus4 Grease's own, from JarvisAKF's account of PLA jamming in the Box's warm feed tubes.",
+        edits=(
+            Edit(
+                file="gcode_macro.cfg",
+                find=(
+                    "[gcode_macro PRINT_START]\n"
+                    "gcode:\n"
+                    "    AUTOTUNE_SHAPERS\n"
+                ),
+                replace=(
+                    "[gcode_macro PRINT_START]\n"
+                    "gcode:\n"
+                    "    # Plus4 Grease (--box-dry): wait for a Box holding PLA or TPU to cool after heating.\n"
+                    "    {% if 'gcode_macro _GREASE_BOX_PRINT_CHECK' in printer %}\n"
+                    "    _GREASE_BOX_PRINT_CHECK\n"
+                    "    {% endif %}\n"
+                    "    AUTOTUNE_SHAPERS\n"
+                ),
+            ),
+        ),
+        option="box-dry",
+        requires="box_dry",
+    ),
+    Feature(
+        id="box_dry_lock",
+        title="Box cool-down lock on loading PLA and TPU (install --box-dry)",
+        detail=(
+            "Puts {} in front of QIDI's E_LOAD, E_BOX and EXTRUDER_LOAD. Loading PLA or TPU from a Box still "
+            "cooling after heating is refused, or during a print waits. It's included from box.cfg and from "
+            "QIDI's Box templates (/home/mks/cfg_with_1 to cfg_with_4, which QIDI copies to box.cfg when the "
+            "number of Boxes changes); the templates are root's, so this asks sudo. A printer with no Box "
+            "connected skips it."
+        ).format(BOX_LOCK_FILE),
+        source="Plus4 Grease's own, from JarvisAKF's account of PLA jamming in the Box's warm feed tubes.",
+        edits=tuple(
+            Edit(
+                file=name,
+                find="[include box1.cfg]\n",
+                replace=(
+                    "[include box1.cfg]\n"
+                    "# Plus4 Grease (--box-dry): Box cool-down lock. A pattern: nothing if the file is gone.\n"
+                    "[include plus4-grease-box-loc[k].cfg]\n"
+                ),
+            )
+            for name in ("box.cfg",) + BOX_TEMPLATES
+        ),
+        files=((BOX_LOCK_FILE, BOX_LOCK_CFG),),
+        option="box-dry",
+        requires="box_dry",
+        commands=("E_LOAD", "E_BOX", "EXTRUDER_LOAD"),
     ),
 )
