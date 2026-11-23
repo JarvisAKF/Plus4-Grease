@@ -2562,7 +2562,7 @@ index ed39791..d4b391b 100644
  
  export const SupportedLocales = Object.freeze([
 diff --git a/src/locales/en.yaml b/src/locales/en.yaml
-index 217e550..abdda2c 100644
+index 217e550..f57b5e7 100644
 --- a/src/locales/en.yaml
 +++ b/src/locales/en.yaml
 @@ -1456,6 +1456,252 @@ app:
@@ -2769,9 +2769,9 @@ index 217e550..abdda2c 100644
 +    dry:
 +      qidi_running: "Drying from the touchscreen at {temp}°C (QIDI's timer)"
 +      help: "Up to {max}°C for the filaments loaded. Hours 0 runs until stopped. Humidity 0 is off; otherwise the heater goes off at or below it and back on 5 points above it."
-+      help_pla: "Up to {max}°C with PLA or TPU in this Box; unload this Box's filament from the toolhead first. Afterwards PLA and TPU load once the Box is at or below {unlock}°C and {minutes} min after the heater stops."
++      help_pla: "Up to {max}°C with PLA or TPU in this Box; unload this Box's filament from the toolhead first. Afterwards PLA and TPU load, and prints start, once the Box is at or below {unlock}°C and {minutes} min after the heater stops."
 +      pla_off: "PLA or TPU is in this Box. QIDI doesn't heat it, as it softens in the warm feed tubes and can jam. Plus4 Grease can dry it and then hold loads until the Box cools: set variable_pla_drying: True in plus4-grease-box-dry-settings.cfg."
-+      pla_printing: PLA or TPU is in this Box, so it's only dried while nothing is printing.
++      pla_printing: PLA or TPU is in this Box, so it's only dried while nothing is printing. Take the PLA and TPU out of it to dry the rest during a print.
 +      cooling_time: "Cooling after heating: {temp}°C now. PLA and TPU load at or below {unlock}°C, in about {minutes} min."
 +      cooling_temp: "Cooling after heating: {temp}°C now. PLA and TPU load once it's at or below {unlock}°C."
 +      status_pla: PLA and TPU stay locked for loading until the Box cools
@@ -3428,7 +3428,7 @@ index 0000000..0dc0f77
 +})
 diff --git a/src/util/__tests__/qidi-box-plus4-dry.spec.ts b/src/util/__tests__/qidi-box-plus4-dry.spec.ts
 new file mode 100644
-index 0000000..55b82b6
+index 0000000..9934dce
 --- /dev/null
 +++ b/src/util/__tests__/qidi-box-plus4-dry.spec.ts
 @@ -0,0 +1,52 @@
@@ -3439,15 +3439,15 @@ index 0000000..55b82b6
 +describe('Plus 4 Box drying settings', () => {
 +  it('uses the defaults without a settings macro (an install from before 0.13)', () => {
 +    expect(qidiBoxDrySettings(undefined)).toEqual({
-+      plaDrying: false, plaMaxTemp: 45, unlockTemp: 35, coolMinutes: 30, printStart: 'wait'
++      plaDrying: false, plaMaxTemp: 45, unlockTemp: 35, coolMinutes: 30
 +    })
 +  })
 +
 +  it('reads the macro variables as Moonraker sends them and keeps them in range', () => {
-+    expect(qidiBoxDrySettings({ pla_drying: true, pla_max_temp: 90, unlock_temp: 5, cool_minutes: 500, print_start: 'cancel' }))
-+      .toEqual({ plaDrying: true, plaMaxTemp: 50, unlockTemp: 30, coolMinutes: 120, printStart: 'cancel' })
-+    expect(qidiBoxDrySettings({ pla_drying: 'no', pla_max_temp: 'x', print_start: 'later' }))
-+      .toMatchObject({ plaDrying: false, plaMaxTemp: 35, printStart: 'wait' })
++    expect(qidiBoxDrySettings({ pla_drying: true, pla_max_temp: 90, unlock_temp: 5, cool_minutes: 500 }))
++      .toEqual({ plaDrying: true, plaMaxTemp: 50, unlockTemp: 30, coolMinutes: 120 })
++    expect(qidiBoxDrySettings({ pla_drying: 'no', pla_max_temp: 'x' }))
++      .toMatchObject({ plaDrying: false, plaMaxTemp: 35 })
 +  })
 +})
 +
@@ -4072,10 +4072,10 @@ index 0000000..4b4c533
 +})
 diff --git a/src/util/qidi-box-dry.ts b/src/util/qidi-box-dry.ts
 new file mode 100644
-index 0000000..c23735d
+index 0000000..8240dec
 --- /dev/null
 +++ b/src/util/qidi-box-dry.ts
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,83 @@
 +// Plus4 Grease: the Box drying settings and the cool-down lock, worked out the way plus4-grease-box-dry.cfg works
 +// them out, so the card shows what the macros will do. The macros decide; this only follows them.
 +
@@ -4084,7 +4084,6 @@ index 0000000..c23735d
 +  plaMaxTemp: number;
 +  unlockTemp: number;
 +  coolMinutes: number;
-+  printStart: 'wait' | 'cancel';
 +}
 +
 +export interface QidiBoxDryState {
@@ -4115,7 +4114,7 @@ index 0000000..c23735d
 +  return Math.min(Math.max(Number.isFinite(number) ? number : 0, low), high)
 +}
 +
-+const DEFAULTS = { pla_drying: false, pla_max_temp: 45, unlock_temp: 35, cool_minutes: 30, print_start: 'wait' }
++const DEFAULTS = { pla_drying: false, pla_max_temp: 45, unlock_temp: 35, cool_minutes: 30 }
 +
 +// The _GREASE_BOX_DRY_SETTINGS macro's variables, from plus4-grease-box-dry-settings.cfg.
 +export const qidiBoxDrySettings = (macro?: Record<string, unknown> | null): QidiBoxDrySettings => {
@@ -4125,8 +4124,7 @@ index 0000000..c23735d
 +    plaDrying: ['true', '1', 'yes', 'on'].includes(String(values.pla_drying).toLowerCase()),
 +    plaMaxTemp: clamped(values.pla_max_temp, 35, 50),
 +    unlockTemp: clamped(values.unlock_temp, 30, 45),
-+    coolMinutes: clamped(values.cool_minutes, 10, 120),
-+    printStart: String(values.print_start).toLowerCase() === 'cancel' ? 'cancel' : 'wait'
++    coolMinutes: clamped(values.cool_minutes, 10, 120)
 +  }
 +}
 +
@@ -4143,8 +4141,8 @@ index 0000000..c23735d
 +  return settings.plaDrying ? Math.min(highest, settings.plaMaxTemp) : 0
 +}
 +
-+// A Box holding PLA or TPU is locked for loading them while minutes of its cool-down are left, or while it is above
-+// unlock_temp after heating (hot).
++// A Box holding PLA or TPU is locked for loading them, and no print starts, while minutes of its cool-down are left, or
++// while it is above unlock_temp after heating (hot).
 +export const qidiBoxCooling = (
 +  state: QidiBoxDryState | null | undefined,
 +  temperature: number | null | undefined,

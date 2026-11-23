@@ -39,7 +39,7 @@ BUILD = 10  # Plus4 Grease's own build number for this Fluidd version; 2 added t
 #           10 adds PLA/TPU drying and shows the Box cool-down lock (0.13.0)
 BUNDLE_VERSION = "{}-{}".format(FLUIDD_VERSION, BUILD)
 BUNDLE_NAME = "plus4-grease-fluidd-{}.zip".format(BUNDLE_VERSION)
-BUNDLE_SHA256 = "17aba9324314241c0613e78412b09ce59a600e261dca417d7989855d06d2f478"
+BUNDLE_SHA256 = "ff7f69c9ccee197cf565dc91a945e478ea6da076f6eeed8557c481b45259dbe6"
 PORT = 81
 NAMESPACE = "plus4_grease_fluidd"
 QIDI_NAMESPACE = "fluidd"

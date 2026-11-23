@@ -380,12 +380,11 @@ class PlaDryingTests(unittest.TestCase):
         self.assertIs(Printer({}, settings=PLA_DRYING).macros["_GREASE_BOX_DRY_SETTINGS"][1]["pla_drying"], True)
 
     def test_settings_are_kept_in_range(self):
-        printer = Printer({}, settings=settings(pla_max_temp=90, unlock_temp=5, cool_minutes=500,
-                                                print_start="later"))
+        printer = Printer({}, settings=settings(pla_max_temp=90, unlock_temp=5, cool_minutes=500))
         printer.run("GREASE_BOX_DRY_SETTINGS")
         self.assertEqual(printer.messages[-1], "PLA/TPU drying: on, up to 50 C. A Box holding PLA or TPU unlocks "
-                         "at or below 30 C and 120 min after its heater last ran. Print start with such a Box "
-                         "still locked: wait.")
+                         "at or below 30 C and 120 min after its heater last ran, and a print doesn't start until "
+                         "then.")
 
     def test_pla_dries_up_to_pla_max_temp(self):
         printer = Printer({0: PLA_SILK, 1: ASA}, settings=PLA_DRYING)
@@ -553,92 +552,87 @@ class LockTests(unittest.TestCase):
         with self.assertRaises(MacroError):
             printer.run("E_LOAD SLOT=0")
 
-    def test_a_tool_change_during_a_print_waits(self):
+    def test_a_tool_change_during_a_print_never_waits(self):
+        # A print doesn't start with a locked Box, so this only happens to a Box heated by hand mid-print.
         printer = self.dried()
-        printer.macros["_GREASE_BOX_DRY_1"][1]["cool_left"] = 3
-        printer.temp(37)
-        printer.printing()
-        printer.run("EXTRUDER_LOAD SLOT=slot0")
-        self.assertEqual(printer.dwells, 3)  # the 3 minutes left; the Box is under 35 C by then
-        self.assertEqual(printer.qidi, ["_GREASE_QIDI_EXTRUDER_LOAD SLOT=slot0"])
-        self.assertTrue(any(m.endswith(" Waiting.") for m in printer.messages))
-        self.assertEqual(printer.messages[-1], "Box 1 has cooled to 34 C. Going on.")
-        self.assertEqual((printer.state()["cool_left"], printer.state()["hot"]), (0, 0))
-
-    def test_wait_keeps_going_while_hot_and_reports_every_5_minutes(self):
-        printer = self.dried()
-        printer.macros["_GREASE_BOX_DRY_1"][1]["cool_left"] = 0
-        printer.temp(47)
-        printer.printing()
-        printer.run("EXTRUDER_LOAD SLOT=slot0")
-        self.assertEqual(printer.dwells, 12)
-        self.assertIn("Box 1: 37 C, 10 min into the cool-down wait.", printer.messages)
-
-    def test_wait_gives_up_after_two_hours(self):
-        printer = self.dried()
-        printer.cooling = 0.0  # a room at 45 C
         printer.printing()
         with self.assertRaises(MacroError) as caught:
             printer.run("EXTRUDER_LOAD SLOT=slot0")
-        self.assertEqual(printer.dwells, 120)
-        self.assertIn("still at 45 C after 2 hours", str(caught.exception))
-        self.assertIn("raise unlock_temp", str(caught.exception))
-        self.assertEqual(printer.qidi, [])
+        self.assertIn("isn't loaded yet", str(caught.exception))
+        self.assertEqual((printer.dwells, printer.qidi), (0, []))
+
+    def test_asa_from_a_box_drying_during_a_print_loads(self):
+        printer = Printer({1: ASA, 2: PETG}, settings=PLA_DRYING, lock=True)
+        printer.settle()
+        printer.printing()
+        printer.run("GREASE_BOX_DRY BOX=1")
+        printer.tick()
+        printer.run("EXTRUDER_LOAD SLOT=slot1")
+        printer.run("EXTRUDER_LOAD SLOT=slot2")
+        self.assertEqual(printer.qidi, ["_GREASE_QIDI_EXTRUDER_LOAD SLOT=slot1", "_GREASE_QIDI_EXTRUDER_LOAD SLOT=slot2"])
+        self.assertEqual(printer.dwells, 0)
 
 
 class PrintStartTests(unittest.TestCase):
-    def test_nothing_to_wait_for(self):
+    def test_nothing_in_the_way(self):
         printer = Printer({0: PLA_SILK, 1: ASA}, settings=PLA_DRYING)
         printer.settle()
+        printer.printing()
         printer.run("_GREASE_BOX_PRINT_CHECK")
         self.assertEqual((printer.dwells, printer.messages), (0, []))
 
-    def test_waits_for_a_cooling_box_with_pla(self):
+    def test_a_cooling_box_with_pla_keeps_the_print_from_starting(self):
         printer = LockTests.dried(LockTests())
         printer.printing()
-        printer.run("_GREASE_BOX_PRINT_CHECK")
-        self.assertEqual(printer.dwells, 30)
-        self.assertTrue(any(m.endswith("The print waits for it before heating anything.") for m in printer.messages))
-        self.assertEqual(printer.messages[-1], "Box 1 has cooled to 25 C. Going on.")
-
-    def test_a_box_without_pla_is_not_waited_for(self):
-        printer = Printer({1: ASA}, settings=PLA_DRYING)
-        printer.settle()
-        printer.run("GREASE_BOX_DRY BOX=1")
-        printer.tick()
-        printer.run("_GREASE_BOX_PRINT_CHECK")
-        self.assertEqual(printer.dwells, 0)
-        self.assertEqual(printer.target(), 45)
-
-    def test_cancel_mode_stops_the_print(self):
-        printer = LockTests.dried(LockTests(), settings=settings(print_start="cancel"))
         with self.assertRaises(MacroError) as caught:
             printer.run("_GREASE_BOX_PRINT_CHECK")
-        self.assertIn("The print wasn't started", str(caught.exception))
+        self.assertEqual(str(caught.exception), "The print wasn't started: Box 1 holds PLA or TPU (slot 1A) and is "
+                         "cooling after heating (45 C now, it unlocks at or below 35 C and in about 30 min). Start "
+                         "the print once it has cooled, or take the PLA and TPU out of the Box.")
         self.assertEqual(printer.dwells, 0)
 
-    def test_pla_drying_is_stopped_for_a_print(self):
+    def test_once_cooled_the_print_starts(self):
+        printer = LockTests.dried(LockTests())
+        for _ in range(30):
+            printer.tick()
+        printer.temp(34)
+        printer.tick()
+        printer.printing()
+        printer.run("_GREASE_BOX_PRINT_CHECK")
+        self.assertEqual(printer.dwells, 0)
+
+    def test_pla_drying_keeps_the_print_from_starting_and_carries_on(self):
         printer = Printer({0: PLA_SILK}, settings=PLA_DRYING)
         printer.settle()
         printer.run("GREASE_BOX_DRY BOX=1 HOURS=4")
         printer.temp(45)
         printer.tick()
         printer.printing()
-        printer.run("_GREASE_BOX_PRINT_CHECK")
-        self.assertEqual(printer.state()["active"], 0)
-        self.assertEqual(printer.target(), 0)
-        self.assertIn("Box 1: drying stopped for the print. PLA and TPU aren't dried during a print.",
-                      printer.messages)
-        self.assertEqual(printer.dwells, 30)
+        with self.assertRaises(MacroError) as caught:
+            printer.run("_GREASE_BOX_PRINT_CHECK")
+        self.assertIn("Box 1 is drying with PLA or TPU in it (slot 1A)", str(caught.exception))
+        self.assertIn("GREASE_BOX_DRY_STOP BOX=1", str(caught.exception))
+        self.assertEqual((printer.state()["active"], printer.target()), (1, 45))
 
-    def test_each_box_is_checked(self):
-        printer = Printer({0: PLA_SILK, 4: PLA_SILK, 8: ASA}, settings=PLA_DRYING, box_count=3)
+    def test_asa_drying_doesnt_stop_a_print(self):
+        printer = Printer({1: ASA}, settings=PLA_DRYING)
         printer.settle()
-        printer.macros["_GREASE_BOX_DRY_2"][1].update(cool_left=4, hot=1)
-        printer.macros["_GREASE_BOX_DRY_3"][1].update(cool_left=9, hot=1)  # no PLA there
-        printer.temp(30, box=2)
+        printer.run("GREASE_BOX_DRY BOX=1")
+        printer.tick()
+        printer.printing()
         printer.run("_GREASE_BOX_PRINT_CHECK")
-        self.assertEqual(printer.dwells, 4)
+        self.assertEqual(printer.target(), 45)
+
+    def test_only_a_box_with_pla_or_tpu_counts(self):
+        printer = Printer({0: PLA_SILK, 4: TPU, 8: ASA}, settings=PLA_DRYING, box_count=3)
+        printer.settle()
+        printer.macros["_GREASE_BOX_DRY_3"][1].update(cool_left=9, hot=1)  # no PLA or TPU there
+        printer.run("_GREASE_BOX_PRINT_CHECK")
+        printer.macros["_GREASE_BOX_DRY_2"][1].update(cool_left=4, hot=1)
+        printer.temp(30, box=2)
+        with self.assertRaises(MacroError) as caught:
+            printer.run("_GREASE_BOX_PRINT_CHECK")
+        self.assertIn("Box 2 holds PLA or TPU (slot 2A)", str(caught.exception))
 
 
 if __name__ == "__main__":

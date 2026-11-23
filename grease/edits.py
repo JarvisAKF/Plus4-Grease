@@ -401,13 +401,13 @@ FEATURES = (
     ),
     Feature(
         id="box_dry_print_start",
-        title="Box cool-down wait at print start (install --box-dry)",
+        title="Box check at print start (install --box-dry)",
         detail=(
-            "Adds _GREASE_BOX_PRINT_CHECK as the first line of PRINT_START. If a Box holding PLA or TPU is "
-            "drying, that stops; if it's still cooling after heating, the print waits for it before anything "
-            "heats (or is cancelled, with print_start: 'cancel' in {}). The line does nothing once Box "
-            "drying is removed."
-        ).format(BOX_SETTINGS_FILE),
+            "Adds _GREASE_BOX_PRINT_CHECK as the first line of PRINT_START, before anything heats. A print "
+            "doesn't start while a Box holding PLA or TPU is drying or still cooling after heating, and says "
+            "which Box and how long, so a print never has to wait for a Box partway through. A Box without "
+            "PLA or TPU in it dries during a print as before. The line does nothing once Box drying is removed."
+        ),
         source="Plus4 Grease's own, from JarvisAKF's account of PLA jamming in the Box's warm feed tubes.",
         edits=(
             Edit(
@@ -420,7 +420,7 @@ FEATURES = (
                 replace=(
                     "[gcode_macro PRINT_START]\n"
                     "gcode:\n"
-                    "    # Plus4 Grease (--box-dry): wait for a Box holding PLA or TPU to cool after heating.\n"
+                    "    # Plus4 Grease (--box-dry): no print while a Box holding PLA or TPU dries or cools.\n"
                     "    {% if 'gcode_macro _GREASE_BOX_PRINT_CHECK' in printer %}\n"
                     "    _GREASE_BOX_PRINT_CHECK\n"
                     "    {% endif %}\n"
@@ -436,7 +436,7 @@ FEATURES = (
         title="Box cool-down lock on loading PLA and TPU (install --box-dry)",
         detail=(
             "Puts {} in front of QIDI's E_LOAD, E_BOX and EXTRUDER_LOAD. Loading PLA or TPU from a Box still "
-            "cooling after heating is refused, or during a print waits. It's included from box.cfg and from "
+            "cooling after heating is refused, never waited for. It's included from box.cfg and from "
             "QIDI's Box templates (/home/mks/cfg_with_1 to cfg_with_4, which QIDI copies to box.cfg when the "
             "number of Boxes changes); the templates are root's, so this asks sudo. A printer with no Box "
             "connected skips it."
