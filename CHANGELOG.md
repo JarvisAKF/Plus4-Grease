@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.2
+- **Overdrive speaks** (Fluidd build 14): its recorded line plays when a print finishes ("Print complete. Faster than you could have done it..."), Klipper shuts down or a print errors, filament runs out (a pause with no filament at the toolhead), Box drying ends, a Box holding PLA or TPU has cooled, or Plus4 Grease refuses a print or a load while a Box cools. Nothing plays when the page opens. Settings > Theme > Persona voice turns it off. A browser plays sound only while the page is open and after it's been clicked or tapped once.
+- The six clips (about 240 KB) are in `fluidd/sounds/overdrive/`, and `tools/build_fluidd.sh` copies them into the page.
+
 ## 0.14.1
 - **Overdrive's print job card** (Fluidd build 13), as in the persona mockup: while a job is loaded, the status card shows the speed in big numbers with 100%, 140%, 180% and MAX buttons (`M220`; MAX is 220%, which Klipper still holds to the printer's own speed and acceleration limits), the model's thumbnail, a 40-segment progress bar with layer, percent and time left, and elapsed time, flow, filament and height. After a print, while a Box holding PLA or TPU cools, it says the next print won't start yet, with the temperature and minutes left. Fluidd's own status card shows when no job is loaded, and with every other persona setting.
 - With a persona on, the side menu shows its labels beside the icons, and the dashboard has a title line: "DASHBOARD" and "EFFICIENCY MODE: ENFORCED".
