@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.3
+- **Fixed: PLA/TPU drying stayed off** even with `variable_pla_drying: True`. The drying file loaded the settings file with `[include plus4-grease-box-dry-setting[s].cfg]`, and QIDI's Klipper reads section names with Python's own rule, which on the printer's Python 3.7 ends a name at its first `]`. Klipper saw a pattern matching no file and used the defaults, so `GREASE_BOX_DRY` refused PLA ("set variable_pla_drying: True..."). Found on the owner's V2.1.1 printer. The include is now `[include plus4-grease-box-dry-setting?.cfg]`; `install` updates an installed drying file from 0.13.0 to 0.13.2. Your settings file isn't touched.
+- `tests/test_py37_headers.py` checks that every section and include line Plus4 Grease writes reads the same under Python 3.7's rule. Earlier checks ran on a newer Python, which reads the whole name.
+
 ## 0.13.2
 - **Fixed: the Box cool-down lock wasn't loaded.** QIDI's Box software rewrites `box.cfg` from its templates through Python's `configparser`, and on the printer's Python 3.7 that cut 0.13.0's include `[include plus4-grease-box-loc[k].cfg]` to `[include plus4-grease-box-loc[k]`, which matches no file. Klipper started normally, but without the lock, and the next `install` called it `skipped`. Found on the owner's V2.1.1 printer right after installing 0.13.1. The include is now `[include plus4-grease-box-loc?.cfg]` after a blank line, with no comment: exactly what that rewrite writes back. The print-start check and drying weren't affected.
 - An install with 0.13.0 or 0.13.1's lock shows it as `update`, and `install` (with or without `--box-dry`) replaces it in `box.cfg` and the templates; `uninstall` removes either form.

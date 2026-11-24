@@ -412,6 +412,9 @@ FEATURES = (
             (BOX_DRY_FILE, "2f30602eb7986401a4943e2c86c7dbf3a908330b35eb1ad64a12865870978f5e"),
             # 0.9.1 to 0.12.0's, without PLA/TPU drying or the cool-down lock.
             (BOX_DRY_FILE, "4062df48c530b28ed10d0eb1f9e536f8a19bc5cf06773b1febcfc8530a62dfe0"),
+            # 0.13.0 to 0.13.2's, whose '[s]' include of the settings file Klipper on Python 3.7 read as a
+            # pattern matching nothing, so the settings (PLA/TPU drying on) were never loaded.
+            (BOX_DRY_FILE, "2b1fe61222c8a4e5480e379116deddfaec726f0b443229d31a0320fa79546bf4"),
         ),
         user_files=(BOX_SETTINGS,),
     ),
