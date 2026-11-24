@@ -161,6 +161,53 @@ index 4e396b1..6284b40 100644
    .toolbar-supplemental {
      display: flex;
      justify-content: flex-end;
+diff --git a/src/components/layout/AppNavDrawer.vue b/src/components/layout/AppNavDrawer.vue
+index 669378b..edf8a0c 100644
+--- a/src/components/layout/AppNavDrawer.vue
++++ b/src/components/layout/AppNavDrawer.vue
+@@ -2,8 +2,9 @@
+   <v-navigation-drawer
+     v-model="open"
+     :color="$vuetify.theme.currentTheme.drawer"
+-    :mini-variant="!showSubNavigation"
++    :mini-variant="!showSubNavigation && !labeled"
+     :floating="!showSubNavigation"
++    :width="labeled ? (showSubNavigation ? 2 * LABELED_WIDTH : LABELED_WIDTH) : undefined"
+     clipped
+     app
+   >
+@@ -13,7 +14,8 @@
+     >
+       <v-navigation-drawer
+         :color="$vuetify.theme.currentTheme.drawer"
+-        mini-variant
++        :mini-variant="!labeled"
++        :width="labeled ? LABELED_WIDTH : undefined"
+         :value="open"
+         class="pb-16 pb-sm-0"
+       >
+@@ -151,6 +153,7 @@ import { Component, Mixins, VModel } from 'vue-property-decorator'
+ 
+ import StateMixin from '@/mixins/state'
+ import BrowserMixin from '@/mixins/browser'
++import { persona } from '@/util/persona'
+ 
+ @Component({})
+ export default class AppNavDrawer extends Mixins(StateMixin, BrowserMixin) {
+@@ -173,6 +176,13 @@ export default class AppNavDrawer extends Mixins(StateMixin, BrowserMixin) {
+     return this.$route.meta?.hasSubNavigation ?? false
+   }
+ 
++  // Plus4 Grease: with a persona on, the side menu shows its labels beside the icons.
++  readonly LABELED_WIDTH = 230
++
++  get labeled (): boolean {
++    return persona(this.$typedState.config.uiSettings.theme.persona) != null
++  }
++
+   get showSubNavigation () {
+     return this.hasSubNavigation && this.socketReady
+   }
 diff --git a/src/components/layout/AppPersonaMark.vue b/src/components/layout/AppPersonaMark.vue
 new file mode 100644
 index 0000000..26ce768
@@ -2909,6 +2956,569 @@ index 0000000..1d0be58
 +  visibility: hidden;
 +}
 +</style>
+diff --git a/src/components/widgets/status/PersonaPrintJob.vue b/src/components/widgets/status/PersonaPrintJob.vue
+new file mode 100644
+index 0000000..a5bda94
+--- /dev/null
++++ b/src/components/widgets/status/PersonaPrintJob.vue
+@@ -0,0 +1,511 @@
++<template>
++  <div class="od-job">
++    <div class="od-job__top">
++      <button
++        type="button"
++        class="od-job__thumb"
++        :aria-label="filename"
++        :disabled="!thumbnail"
++        @click="handleViewThumbnail"
++      >
++        <img
++          v-if="thumbnail"
++          :src="thumbnail"
++          alt=""
++        >
++        <svg
++          v-else
++          width="84"
++          height="84"
++          viewBox="0 0 84 84"
++          fill="none"
++          stroke="currentColor"
++          stroke-width="2"
++          aria-hidden="true"
++        >
++          <path d="M14 58l28 14 28-14V30L42 16 14 30z" />
++          <path d="M14 30l28 14 28-14M42 44v28" />
++          <path
++            d="M30 37v18M54 37v18"
++            class="od-job__accent-stroke"
++          />
++        </svg>
++      </button>
++
++      <div class="od-job__head">
++        <div
++          class="od-job__file"
++          :title="filename"
++        >
++          {{ shortName }}
++        </div>
++        <div class="od-job__sub">
++          {{ subline }}
++        </div>
++        <div class="od-job__speed">
++          <span class="od-job__speed-value">{{ speedPercent }}</span>
++          <span class="od-job__speed-unit">%</span>
++          <span class="od-job__speed-label">SPEED</span>
++        </div>
++      </div>
++    </div>
++
++    <div
++      v-if="printerPrinting || printerPaused"
++      class="od-job__speeds"
++      role="group"
++      aria-label="Speed"
++    >
++      <button
++        v-for="speed in speeds"
++        :key="speed.value"
++        type="button"
++        class="od-job__speed-btn"
++        :class="{ 'od-job__speed-btn--on': speed.value === speedPercent }"
++        :aria-pressed="speed.value === speedPercent ? 'true' : 'false'"
++        :disabled="!klippyReady || hasWait($waits.onSetSpeed)"
++        @click="setSpeed(speed.value)"
++      >
++        {{ speed.label }}
++      </button>
++    </div>
++
++    <div
++      class="od-job__segments"
++      role="progressbar"
++      aria-valuemin="0"
++      aria-valuemax="100"
++      :aria-valuenow="progress"
++    >
++      <div
++        v-for="n in 40"
++        :key="n"
++        class="od-job__segment"
++        :class="{ 'od-job__segment--on': n <= filledSegments, 'od-job__segment--done': done }"
++      />
++    </div>
++
++    <div class="od-job__line">
++      <span>{{ layerText }}</span>
++      <span class="od-job__accent">{{ progress }}%</span>
++      <span>{{ etaText }}</span>
++    </div>
++
++    <div class="od-job__stats">
++      <div>
++        <span class="od-job__stat-label">ELAPSED</span>
++        <span class="od-job__stat">{{ elapsed }}</span>
++      </div>
++      <div>
++        <span class="od-job__stat-label">FLOW</span>
++        <span class="od-job__stat">{{ flow }}</span>
++      </div>
++      <div>
++        <span class="od-job__stat-label">FILAMENT</span>
++        <span class="od-job__stat">{{ filament }}</span>
++      </div>
++      <div>
++        <span class="od-job__stat-label">HEIGHT</span>
++        <span class="od-job__stat">{{ height }}</span>
++      </div>
++    </div>
++
++    <div
++      v-if="coolingText"
++      class="od-job__cooling"
++      role="status"
++    >
++      <svg
++        width="20"
++        height="20"
++        viewBox="0 0 24 24"
++        fill="none"
++        stroke="currentColor"
++        stroke-width="2"
++        aria-hidden="true"
++        class="od-job__accent"
++      >
++        <path d="M12 2v20M4 6l16 12M20 6L4 18" />
++        <path d="M9 3l3 2 3-2M9 21l3-2 3 2" />
++      </svg>
++      <span>{{ coolingText }}</span>
++    </div>
++
++    <file-preview-dialog
++      v-if="filePreviewState.open"
++      v-model="filePreviewState.open"
++      :filename="filePreviewState.filename"
++      :src="filePreviewState.src"
++      :width="filePreviewState.width"
++    />
++  </div>
++</template>
++
++<script lang="ts">
++import { Component, Mixins } from 'vue-property-decorator'
++import StateMixin from '@/mixins/state'
++import FilesMixin from '@/mixins/files'
++import ToolheadMixin from '@/mixins/toolhead'
++import FilePreviewDialog from '../filesystem/FilePreviewDialog.vue'
++import type { TimeEstimates } from '@/store/printer/types'
++import type { AppFileWithMeta } from '@/store/files/types'
++import { personaJobLayout, personaJobSpeeds, personaCoolingNotice } from '@/util/persona'
++import { qidiBoxCooling, qidiBoxDrySettings } from '@/util/qidi-box-dry'
++
++// Plus4 Grease: Overdrive's print job card body, in place of Fluidd's status tab while a job is loaded.
++@Component({
++  components: {
++    FilePreviewDialog
++  }
++})
++export default class PersonaPrintJob extends Mixins(StateMixin, FilesMixin, ToolheadMixin) {
++  filePreviewState: any = {
++    open: false,
++    filename: '',
++    src: ''
++  }
++
++  get printer () {
++    return this.$typedState.printer.printer
++  }
++
++  get filename (): string {
++    return this.printer.print_stats?.filename ?? ''
++  }
++
++  get printerFile (): AppFileWithMeta | undefined {
++    return this.$typedGetters['printer/getPrinterFile']
++  }
++
++  get thumbnail (): string | undefined {
++    if (this.printerFile?.thumbnails) {
++      return this.getThumbUrl(this.printerFile, 'gcodes', this.printerFile.path, true, this.printerFile.modified)
++    }
++
++    return undefined
++  }
++
++  get estimates (): TimeEstimates {
++    return this.$typedGetters['printer/getTimeEstimates']
++  }
++
++  get layout () {
++    const layers: number = this.$typedGetters['printer/getPrintLayers'] ?? 0
++    const file = this.printerFile
++
++    return personaJobLayout({
++      filename: this.filename,
++      state: this.printer.print_stats?.state ?? '',
++      progress: this.estimates.progress,
++      layer: layers > 0 ? this.$typedGetters['printer/getPrintLayer'] : null,
++      totalLayers: layers > 0 ? layers : null,
++      left: this.estimates.actualLeft > 0 ? this.estimates.actualLeft : this.estimates.fileLeft,
++      layerHeight: file?.layer_height ?? null,
++      slicer: file?.slicer ?? null
++    })
++  }
++
++  get shortName (): string {
++    return this.layout.name
++  }
++
++  get subline (): string {
++    return this.layout.subline
++  }
++
++  get done (): boolean {
++    return this.layout.done
++  }
++
++  get progress (): number {
++    return this.layout.progress
++  }
++
++  get filledSegments (): number {
++    return this.layout.segments
++  }
++
++  get layerText (): string {
++    return this.layout.layerText
++  }
++
++  get etaText (): string {
++    return this.layout.done
++      ? 'DONE'
++      : this.layout.left > 0 ? `T-${this.$filters.formatCounterSeconds(this.layout.left)}` : 'T-—'
++  }
++
++  get speedPercent (): number {
++    return Math.round((this.printer.gcode_move?.speed_factor ?? 1) * 100)
++  }
++
++  get speeds () {
++    return personaJobSpeeds
++  }
++
++  get elapsed (): string {
++    const seconds = this.estimates.printDuration
++
++    return seconds > 0 ? this.$filters.formatCounterSeconds(seconds) : '—'
++  }
++
++  get flow (): string {
++    const velocity = this.printer.motion_report?.live_extruder_velocity ?? 0
++    const flow = Math.PI / 4 * this.filamentDiameter ** 2 * velocity
++
++    return this.printerPrinting && flow > 0 ? `${flow.toFixed(1)} mm³/s` : '—'
++  }
++
++  get filament (): string {
++    const used = this.printer.print_stats?.filament_used ?? 0
++
++    return used > 0 ? this.$filters.getReadableLengthString(used) : '—'
++  }
++
++  get height (): string {
++    const z = this.printer.gcode_move?.gcode_position?.[2]
++
++    return z != null ? `${z.toFixed(1)} mm` : '—'
++  }
++
++  // A print won't start while a Box holding PLA or TPU cools (Plus4 Grease's print-start check); say so here.
++  get coolingText (): string {
++    if (this.printerPrinting || this.printerPaused) return ''
++
++    const settings = qidiBoxDrySettings(this.printer['gcode_macro _GREASE_BOX_DRY_SETTINGS'])
++    const count: number = this.$typedGetters['qidiBox/getBoxCount'] ?? 0
++
++    for (let box = 1; box <= count; box++) {
++      if (!(this.$typedGetters['qidiBox/getHeaterLimits'](box) as number[]).includes(0)) continue
++
++      const temperature: number | null = this.printer[`heater_generic heater_box${box}`]?.temperature ?? null
++      const cooling = qidiBoxCooling(this.printer[`gcode_macro _GREASE_BOX_DRY_${box}`], temperature, settings)
++
++      if (cooling.locked) {
++        return personaCoolingNotice(box, cooling.temperature, settings.unlockTemp, cooling.minutes)
++      }
++    }
++
++    return ''
++  }
++
++  setSpeed (value: number) {
++    this.sendGcode(`M220 S${value}`, this.$waits.onSetSpeed)
++  }
++
++  handleViewThumbnail () {
++    const printerFile = this.printerFile
++    const thumb = printerFile && this.getThumb(printerFile, 'gcodes', printerFile.path, true, printerFile.modified)
++
++    if (thumb) {
++      this.filePreviewState = {
++        open: true,
++        filename: printerFile.filename,
++        src: thumb.url,
++        width: thumb.width
++      }
++    }
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++  @mixin chamfer($size) {
++    clip-path: polygon(#{$size} 0, 100% 0, 100% calc(100% - #{$size}), calc(100% - #{$size}) 100%, 0 100%, 0 #{$size});
++  }
++
++  .od-job {
++    display: flex;
++    flex-direction: column;
++    gap: 12px;
++    padding: 14px 16px 16px;
++    font-weight: 600;
++  }
++
++  .od-job__top {
++    display: flex;
++    flex-wrap: wrap;
++    gap: 16px;
++  }
++
++  .od-job__thumb {
++    width: 124px;
++    height: 124px;
++    flex-shrink: 0;
++    display: flex;
++    align-items: center;
++    justify-content: center;
++    border: 0;
++    padding: 0;
++    background: #141418;
++    color: #6C6C78;
++    cursor: pointer;
++    @include chamfer(10px);
++
++    &:disabled {
++      cursor: default;
++    }
++
++    img {
++      max-width: 100%;
++      max-height: 100%;
++    }
++  }
++
++  .od-job__accent-stroke {
++    stroke: var(--v-primary-base);
++  }
++
++  .od-job__head {
++    flex: 1 1 220px;
++    min-width: 0;
++    display: flex;
++    flex-direction: column;
++    gap: 4px;
++  }
++
++  .od-job__file {
++    font-size: 19px;
++    font-weight: 700;
++    overflow: hidden;
++    text-overflow: ellipsis;
++    white-space: nowrap;
++  }
++
++  .od-job__sub,
++  .od-job__stat-label,
++  .od-job__speed-label {
++    letter-spacing: 0.12em;
++    color: #9C9CA6;
++  }
++
++  .od-job__sub {
++    font-size: 12px;
++  }
++
++  .od-job__speed {
++    display: flex;
++    align-items: baseline;
++    gap: 4px;
++    line-height: 0.9;
++    padding-top: 8px;
++  }
++
++  .od-job__speed-value {
++    font-size: 64px;
++    font-weight: 700;
++    letter-spacing: -0.02em;
++    font-variant-numeric: tabular-nums;
++  }
++
++  .od-job__speed-unit {
++    font-size: 24px;
++    font-weight: 700;
++    color: var(--v-primary-base);
++  }
++
++  .od-job__speed-label {
++    font-size: 11px;
++    letter-spacing: 0.18em;
++    padding-left: 8px;
++  }
++
++  .od-job__speeds {
++    display: flex;
++    gap: 6px;
++  }
++
++  .od-job__speed-btn {
++    flex: 1;
++    height: 44px;
++    border: 0;
++    background: #18181D;
++    color: #F2F2F4;
++    font-family: inherit;
++    font-size: 14px;
++    font-weight: 700;
++    letter-spacing: 0.08em;
++    cursor: pointer;
++    @include chamfer(7px);
++
++    &--on {
++      background: var(--v-primary-base);
++      color: #070708;
++    }
++
++    &:disabled {
++      opacity: 0.5;
++      cursor: default;
++    }
++  }
++
++  .od-job__segments {
++    display: flex;
++    gap: 3px;
++  }
++
++  .od-job__segment {
++    flex: 1;
++    height: 12px;
++    background: #232329;
++
++    &--on {
++      background: var(--v-primary-base);
++    }
++
++    &--on.od-job__segment--done {
++      background: #4A4A55;
++    }
++  }
++
++  .od-job__line {
++    display: flex;
++    justify-content: space-between;
++    gap: 10px;
++    font-size: 13px;
++    letter-spacing: 0.1em;
++    font-variant-numeric: tabular-nums;
++  }
++
++  .od-job__accent {
++    color: var(--v-primary-base);
++  }
++
++  .od-job__stats {
++    display: grid;
++    grid-template-columns: repeat(4, minmax(0, 1fr));
++    gap: 8px;
++
++    > div {
++      display: flex;
++      flex-direction: column;
++      gap: 2px;
++      min-width: 0;
++    }
++  }
++
++  .od-job__stat-label {
++    font-size: 10px;
++    letter-spacing: 0.16em;
++  }
++
++  .od-job__stat {
++    font-size: 15px;
++    font-variant-numeric: tabular-nums;
++    white-space: nowrap;
++    overflow: hidden;
++    text-overflow: ellipsis;
++  }
++
++  .od-job__cooling {
++    display: flex;
++    align-items: center;
++    gap: 10px;
++    padding: 10px 12px;
++    background: #1E1412;
++    color: #FFD9D4;
++    font-size: 13px;
++    line-height: 1.35;
++    @include chamfer(8px);
++  }
++</style>
+diff --git a/src/components/widgets/status/PrinterStatusCard.vue b/src/components/widgets/status/PrinterStatusCard.vue
+index 4f36019..058d1e8 100644
+--- a/src/components/widgets/status/PrinterStatusCard.vue
++++ b/src/components/widgets/status/PrinterStatusCard.vue
+@@ -53,7 +53,8 @@
+       touchless
+     >
+       <v-tab-item key="status">
+-        <status-tab />
++        <persona-print-job v-if="personaJob" />
++        <status-tab v-else />
+       </v-tab-item>
+ 
+       <v-tab-item
+@@ -75,6 +76,8 @@ import StateMixin from '@/mixins/state'
+ import AfcMixin from '@/mixins/afc'
+ import StatusControls from './StatusControls.vue'
+ import StatusTab from './StatusTab.vue'
++import PersonaPrintJob from './PersonaPrintJob.vue'
++import { persona } from '@/util/persona'
+ import ReprintTab from './ReprintTab.vue'
+ import type { TimeEstimates } from '@/store/printer/types'
+ import getFilePaths from '@/util/get-file-paths'
+@@ -83,7 +86,8 @@ import getFilePaths from '@/util/get-file-paths'
+   components: {
+     StatusControls,
+     StatusTab,
+-    ReprintTab
++    ReprintTab,
++    PersonaPrintJob
+   }
+ })
+ export default class PrinterStatusCard extends Mixins(StateMixin, AfcMixin) {
+@@ -91,6 +95,12 @@ export default class PrinterStatusCard extends Mixins(StateMixin, AfcMixin) {
+ 
+   // If the user has no history plugin, and there's no print running..
+   // then hide the collapse control.
++  // Plus4 Grease: Overdrive's own print job layout while a job is loaded (printing, paused or finished).
++  get personaJob (): boolean {
++    return persona(this.$typedState.config.uiSettings.theme.persona)?.id === 'overdrive' &&
++      (this.printerPrinting || this.printerPaused || this.filename !== '')
++  }
++
+   get supportsHistoryComponent (): boolean {
+     return this.$typedGetters['server/componentSupport']('history')
+   }
 diff --git a/src/components/widgets/thermals/TemperatureTargets.vue b/src/components/widgets/thermals/TemperatureTargets.vue
 index 0b00d7e..d537b6a 100644
 --- a/src/components/widgets/thermals/TemperatureTargets.vue
@@ -3316,10 +3926,10 @@ index 425d368..3e16881 100644
 +@import "./personas";
 diff --git a/src/scss/personas.scss b/src/scss/personas.scss
 new file mode 100644
-index 0000000..0992887
+index 0000000..85859ec
 --- /dev/null
 +++ b/src/scss/personas.scss
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,171 @@
 +// Plus4 Grease personas (Settings > Theme > Persona). Each look applies only under its class on the app root
 +// (persona-<id>, set in App.vue), so Fluidd's own look is untouched while the persona is Off. The colors of the top
 +// bar, the drawer, card headings and buttons come from Vuetify's theme (src/util/persona.ts); the rest is here.
@@ -3405,6 +4015,7 @@ index 0000000..0992887
 +
 +    .v-list-item__title,
 +    .v-list-item .text-caption {
++      font-size: 13px !important;
 +      font-weight: 600;
 +      letter-spacing: 0.12em;
 +      text-transform: uppercase;
@@ -3970,12 +4581,12 @@ index 8b4293a..942925c 100644
  type RootStateType<TModules> = {
 diff --git a/src/util/__tests__/persona.spec.ts b/src/util/__tests__/persona.spec.ts
 new file mode 100644
-index 0000000..5f177c4
+index 0000000..4684c58
 --- /dev/null
 +++ b/src/util/__tests__/persona.spec.ts
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,132 @@
 +import { describe, expect, it } from 'vitest'
-+import { PERSONAS, persona, personaStatusLine, type PersonaStatus } from '../persona'
++import { PERSONAS, persona, personaCoolingNotice, personaJobLayout, personaJobSpeeds, personaStatusLine, type PersonaStatus } from '../persona'
 +
 +const idle: PersonaStatus = {
 +  klippyReady: true,
@@ -4057,6 +4668,53 @@ index 0000000..5f177c4
 +    expect(line({ heaters: [{ name: 'Extruder', temperature: 150, target: 220 }] }))
 +      .toBe('Heating Extruder: 150 of 220°C.')
 +    expect(line({ heaters: [{ name: 'Extruder', temperature: 219, target: 220 }] })).toMatch(/^Idle/)
++  })
++})
++
++describe("Overdrive's print job card", () => {
++  const job = {
++    filename: 'parts/bracket_v3.gcode',
++    state: 'printing',
++    progress: 41.6,
++    layer: 112,
++    totalLayers: 270,
++    left: 2569.4,
++    layerHeight: 0.2,
++    slicer: 'QIDIStudio'
++  }
++
++  it('lays out a running print', () => {
++    expect(personaJobLayout(job)).toEqual({
++      name: 'bracket_v3',
++      subline: '0.2 MM LAYERS · QIDISTUDIO',
++      done: false,
++      progress: 41,
++      segments: 16,
++      layerText: 'LAYER 112/270',
++      left: 2569
++    })
++  })
++
++  it('fills every segment when done and says when it was cancelled', () => {
++    expect(personaJobLayout({ ...job, state: 'complete', progress: 99.7 }))
++      .toMatchObject({ done: true, progress: 100, segments: 40, layerText: 'LAYER 270/270', left: 0 })
++    expect(personaJobLayout({ ...job, state: 'cancelled', slicer: null }).subline).toBe('0.2 MM LAYERS · CANCELLED')
++  })
++
++  it('copes without layers, metadata or a sane progress', () => {
++    expect(personaJobLayout({ ...job, totalLayers: null, layer: null, layerHeight: null, slicer: null, progress: 140 }))
++      .toMatchObject({ layerText: 'LAYER —', subline: '', progress: 100, segments: 40 })
++  })
++
++  it('has the four speed buttons, ending at MAX', () => {
++    expect(personaJobSpeeds.map(s => s.value)).toEqual([100, 140, 180, 220])
++  })
++
++  it('words the cool-down notice', () => {
++    expect(personaCoolingNotice(1, 38.4, 35, 12))
++      .toBe('Print start locked: Box 1 holds PLA or TPU and is cooling after heating. 38° now, it unlocks at 35°, in about 12 min.')
++    expect(personaCoolingNotice(2, null, 35, 0))
++      .toBe('Print start locked: Box 2 holds PLA or TPU and is cooling after heating. It unlocks at 35°.')
 +  })
 +})
 diff --git a/src/util/__tests__/qidi-box-flow.spec.ts b/src/util/__tests__/qidi-box-flow.spec.ts
@@ -4881,10 +5539,10 @@ index 0000000..4b4c533
 +})
 diff --git a/src/util/persona.ts b/src/util/persona.ts
 new file mode 100644
-index 0000000..7c436ba
+index 0000000..16e0941
 --- /dev/null
 +++ b/src/util/persona.ts
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,201 @@
 +// Plus4 Grease personas: a look for the whole page (colors, font, card shapes, logo) and a status line in the top
 +// bar that says what the printer is doing in the persona's voice. Picked in Settings > Theme; 'none' is Fluidd's own
 +// look. The line only reports what the printer state already shows; it never decides anything.
@@ -4900,6 +5558,8 @@ index 0000000..7c436ba
 +  // Shown under the logo and as the status line's label.
 +  tagline: string;
 +  label: string;
++  // Beside the dashboard's title.
++  heading: string;
 +}
 +
 +export const PERSONAS: Persona[] = [
@@ -4914,7 +5574,8 @@ index 0000000..7c436ba
 +      btncolor: '#18181D'
 +    },
 +    tagline: 'OVERDRIVE',
-+    label: 'SYSTEM ›'
++    label: 'SYSTEM ›',
++    heading: 'EFFICIENCY MODE: ENFORCED'
 +  }
 +]
 +
@@ -5018,6 +5679,70 @@ index 0000000..7c436ba
 +    default:
 +      return ''
 +  }
++}
++
++// ---------------------------------------------------------------- Overdrive's print job card
++
++// Speed buttons: M220 values. MAX is the mockup's 220%; Klipper still holds every move to the printer's own velocity
++// and acceleration limits.
++export const personaJobSpeeds: { label: string, value: number }[] = [
++  { label: '100%', value: 100 },
++  { label: '140%', value: 140 },
++  { label: '180%', value: 180 },
++  { label: 'MAX', value: 220 }
++]
++
++export interface PersonaJobInput {
++  filename: string;
++  state: string;
++  // 0 to 100, as Fluidd's time estimates give it.
++  progress: number;
++  layer: number | null;
++  totalLayers: number | null;
++  // Seconds left, or 0 when unknown.
++  left: number;
++  layerHeight: number | null;
++  slicer: string | null;
++}
++
++export interface PersonaJobLayout {
++  name: string;
++  subline: string;
++  done: boolean;
++  progress: number;
++  segments: number;
++  layerText: string;
++  left: number;
++}
++
++export const personaJobLayout = (job: PersonaJobInput): PersonaJobLayout => {
++  const done = job.state === 'complete'
++  const progress = done ? 100 : Math.max(0, Math.min(100, Math.floor(job.progress)))
++  const parts = [
++    job.layerHeight ? `${job.layerHeight} MM LAYERS` : null,
++    job.slicer ? job.slicer.toUpperCase() : null,
++    ['cancelled', 'error'].includes(job.state) ? job.state.toUpperCase() : null
++  ].filter((part): part is string => part != null)
++  const layerText = job.totalLayers
++    ? `LAYER ${done ? job.totalLayers : job.layer ?? 0}/${job.totalLayers}`
++    : 'LAYER —'
++
++  return {
++    name: shortName(job.filename),
++    subline: parts.join(' · '),
++    done,
++    progress,
++    segments: Math.floor(progress * 40 / 100),
++    layerText,
++    left: done ? 0 : Math.max(0, Math.round(job.left))
++  }
++}
++
++export const personaCoolingNotice = (box: number, temperature: number | null, unlockTemp: number, minutes: number) => {
++  const unlocks = `unlocks at ${unlockTemp}°${minutes > 0 ? `, in about ${minutes} min` : ''}.`
++  const when = temperature != null ? `${Math.round(temperature)}° now, it ${unlocks}` : `It ${unlocks}`
++
++  return `Print start locked: Box ${box} holds PLA or TPU and is cooling after heating. ${when}`
 +}
 diff --git a/src/util/qidi-box-dry.ts b/src/util/qidi-box-dry.ts
 new file mode 100644
@@ -5846,10 +6571,33 @@ index 0000000..78a0dbd
 +  return buttons.map(button => ({ ...button, active: active.includes(button.tool) }))
 +}
 diff --git a/src/views/Dashboard.vue b/src/views/Dashboard.vue
-index a01c43f..6155512 100644
+index a01c43f..bf828e9 100644
 --- a/src/views/Dashboard.vue
 +++ b/src/views/Dashboard.vue
-@@ -55,6 +55,7 @@ import SensorsCard from '@/components/widgets/sensors/SensorsCard.vue'
+@@ -1,5 +1,14 @@
+ <template>
+   <v-row :dense="$vuetify.breakpoint.smAndDown">
++    <v-col
++      v-if="personaHeading"
++      cols="12"
++      class="persona-heading pb-0"
++    >
++      <h1>DASHBOARD</h1>
++      <span>{{ personaHeading }}</span>
++    </v-col>
++
+     <template v-for="(container, containerIndex) in containers">
+       <app-observed-column
+         v-if="inLayout || hasCards(container)"
+@@ -34,6 +43,7 @@
+ 
+ <script lang="ts">
+ import { Component, Mixins, Watch } from 'vue-property-decorator'
++import { persona } from '@/util/persona'
+ import StateMixin from '@/mixins/state'
+ import PrinterStatusCard from '@/components/widgets/status/PrinterStatusCard.vue'
+ import JobsCard from '@/components/widgets/jobs/JobsCard.vue'
+@@ -55,6 +65,7 @@ import SensorsCard from '@/components/widgets/sensors/SensorsCard.vue'
  import RunoutSensorsCard from '@/components/widgets/runout-sensors/RunoutSensorsCard.vue'
  import BeaconCard from '@/components/widgets/beacon/BeaconCard.vue'
  import AfcCard from '@/components/widgets/afc/AfcCard.vue'
@@ -5857,7 +6605,7 @@ index a01c43f..6155512 100644
  import type Sortable from 'sortablejs'
  
  @Component({
-@@ -77,7 +78,9 @@ import type Sortable from 'sortablejs'
+@@ -77,12 +88,19 @@ import type Sortable from 'sortablejs'
      SensorsCard,
      RunoutSensorsCard,
      BeaconCard,
@@ -5868,7 +6616,17 @@ index a01c43f..6155512 100644
    }
  })
  export default class Dashboard extends Mixins(StateMixin) {
-@@ -154,6 +157,10 @@ export default class Dashboard extends Mixins(StateMixin) {
+   containers: Array<LayoutConfig[]> = []
+ 
++  // Plus4 Grease: a persona's title line above the cards.
++  get personaHeading (): string {
++    return persona(this.$typedState.config.uiSettings.theme.persona)?.heading ?? ''
++  }
++
+   mounted () {
+     this.onLayoutChange()
+   }
+@@ -154,6 +172,10 @@ export default class Dashboard extends Mixins(StateMixin) {
      return this.$typedGetters['printer/getSupportsAfc']
    }
  
@@ -5879,7 +6637,7 @@ index a01c43f..6155512 100644
    get hasMacros (): boolean {
      return this.$typedGetters['macros/getVisibleMacros'].length > 0
    }
-@@ -237,6 +244,7 @@ export default class Dashboard extends Mixins(StateMixin) {
+@@ -237,6 +259,7 @@ export default class Dashboard extends Mixins(StateMixin) {
      if (item.id === 'sensors-card' && !this.hasSensors) return true
      if (item.id === 'temperature-card' && !this.hasHeatersOrTemperatureSensors) return true
      if (item.id === 'afc-card' && !this.supportsAfc) return true
@@ -5887,3 +6645,30 @@ index a01c43f..6155512 100644
  
      // Otherwise return the opposite of whatever the enabled state is.
      return !item.enabled
+@@ -246,4 +269,26 @@ export default class Dashboard extends Mixins(StateMixin) {
+ 
+ <style lang="scss" scoped>
+ @import '@/scss/draggable.scss';
++
++.persona-heading {
++  display: flex;
++  flex-wrap: wrap;
++  align-items: baseline;
++  justify-content: space-between;
++  gap: 6px 16px;
++
++  h1 {
++    margin: 0;
++    font-size: 22px;
++    font-weight: 700;
++    letter-spacing: 0.2em;
++  }
++
++  span {
++    font-size: 11px;
++    font-weight: 600;
++    letter-spacing: 0.16em;
++    color: #9C9CA6;
++  }
++}
+ </style>

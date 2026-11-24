@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.1
+- **Overdrive's print job card** (Fluidd build 13), as in the persona mockup: while a job is loaded, the status card shows the speed in big numbers with 100%, 140%, 180% and MAX buttons (`M220`; MAX is 220%, which Klipper still holds to the printer's own speed and acceleration limits), the model's thumbnail, a 40-segment progress bar with layer, percent and time left, and elapsed time, flow, filament and height. After a print, while a Box holding PLA or TPU cools, it says the next print won't start yet, with the temperature and minutes left. Fluidd's own status card shows when no job is loaded, and with every other persona setting.
+- With a persona on, the side menu shows its labels beside the icons, and the dashboard has a title line: "DASHBOARD" and "EFFICIENCY MODE: ENFORCED".
+
 ## 0.14.0
 - **Personas in the new Fluidd (build 12)**, starting with **Overdrive**. Settings > Theme > Persona gives the whole page a persona's look and puts a status line in the top bar that says what the printer is doing in the persona's voice. Overdrive: near-black with a red accent, Chakra Petch in spaced capitals, cut-corner cards and buttons, segmented progress bars, its own mark in place of the logo, and lines like "SYSTEM › bracket_v3: 41% done. Layer 112 of 270. Holding the line." or a Box's drying and cool-down. Off goes back to Fluidd's own look. The font is bundled, so it needs no internet. Steward, Sidekick, Serene and Sentinel come next.
 - Install with `install.sh fluidd install` and `plus4-grease-fluidd-v1.38.1-12.zip`; your Fluidd settings are kept, and the persona starts Off.
