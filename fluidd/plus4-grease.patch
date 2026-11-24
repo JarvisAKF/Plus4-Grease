@@ -2972,10 +2972,10 @@ index 0000000..063ff4f
 +} satisfies ActionTree<QidiBoxState, RootState>
 diff --git a/src/store/qidiBox/getters.ts b/src/store/qidiBox/getters.ts
 new file mode 100644
-index 0000000..fe33286
+index 0000000..648773f
 --- /dev/null
 +++ b/src/store/qidiBox/getters.ts
-@@ -0,0 +1,175 @@
+@@ -0,0 +1,180 @@
 +import type { GetterTree } from 'vuex'
 +import type { QidiBoxState } from './types'
 +import type { RootState } from '../types'
@@ -3001,6 +3001,7 @@ index 0000000..fe33286
 +  type QidiBoxStepText,
 +  type QidiBoxTask
 +} from '@/util/qidi-box-task'
++import { qidiBoxDrySettings, qidiBoxHeaterLimit } from '@/util/qidi-box-dry'
 +
 +export const getters = {
 +  getBoxCount: (state, getters, rootState): number => {
@@ -3027,11 +3028,15 @@ index 0000000..fe33286
 +  },
 +
 +  // Box N's heater may not exceed the lowest Box temperature limit among its loaded filaments, as on the
-+  // touchscreen; a limit of 0 forbids heating. Null when no loaded filament has a known limit.
-+  getHeaterLimit: (state, getters) => (box: number): number | null => {
-+    const limits = getters.getHeaterLimits(box) as number[]
++  // touchscreen; a limit of 0 forbids heating. With Plus4 Grease's PLA/TPU drying on, a Box holding PLA or TPU may go
++  // up to pla_max_temp, as GREASE_BOX_DRY allows, but not during a print. Null when no loaded filament has a known
++  // limit.
++  getHeaterLimit: (state, getters, rootState) => (box: number): number | null => {
++    const printer = rootState.printer.printer
++    const settings = qidiBoxDrySettings(printer['gcode_macro _GREASE_BOX_DRY_SETTINGS'])
++    const printing = ['printing', 'paused'].includes(printer.print_stats?.state ?? '')
 +
-+    return limits.length ? Math.min(...limits) : null
++    return qidiBoxHeaterLimit(getters.getHeaterLimits(box) as number[], settings, printing)
 +  },
 +
 +  // The known Box limits of the filaments loaded in Box N.
@@ -3428,12 +3433,12 @@ index 0000000..0dc0f77
 +})
 diff --git a/src/util/__tests__/qidi-box-plus4-dry.spec.ts b/src/util/__tests__/qidi-box-plus4-dry.spec.ts
 new file mode 100644
-index 0000000..9934dce
+index 0000000..af2c57b
 --- /dev/null
 +++ b/src/util/__tests__/qidi-box-plus4-dry.spec.ts
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,70 @@
 +import { describe, expect, it } from 'vitest'
-+import { qidiBoxCooling, qidiBoxDryLimit, qidiBoxDrySettings } from '../qidi-box-dry'
++import { qidiBoxCooling, qidiBoxDryLimit, qidiBoxDrySettings, qidiBoxHeaterLimit } from '../qidi-box-dry'
 +
 +// Plus4 Grease: the card follows plus4-grease-box-dry.cfg's settings, heater limit and cool-down lock.
 +describe('Plus 4 Box drying settings', () => {
@@ -3465,6 +3470,24 @@ index 0000000..9934dce
 +    expect(qidiBoxDryLimit([0, 65], on)).toBe(45)
 +    expect(qidiBoxDryLimit([0], qidiBoxDrySettings({ pla_drying: true, pla_max_temp: 50 }))).toBe(50)
 +    expect(qidiBoxDryLimit([0, 45], qidiBoxDrySettings({ pla_drying: true, pla_max_temp: 50 }))).toBe(45)
++  })
++})
++
++describe('Plus 4 Box heater limit (the Thermals target and the card)', () => {
++  const off = qidiBoxDrySettings({})
++  const on = qidiBoxDrySettings({ pla_drying: true })
++
++  it("is QIDI's limit without PLA/TPU drying", () => {
++    expect(qidiBoxHeaterLimit([0, 65], off, false)).toBe(0)
++    expect(qidiBoxHeaterLimit([45, 65], off, true)).toBe(45)
++    expect(qidiBoxHeaterLimit([], off, false)).toBeNull()
++  })
++
++  it('allows PLA/TPU drying up to pla_max_temp when it is on, but not during a print', () => {
++    expect(qidiBoxHeaterLimit([0, 65], on, false)).toBe(45)
++    expect(qidiBoxHeaterLimit([0, 40], on, false)).toBe(40)
++    expect(qidiBoxHeaterLimit([0, 65], on, true)).toBe(0)
++    expect(qidiBoxHeaterLimit([45, 65], on, true)).toBe(45)
 +  })
 +})
 +
@@ -4072,10 +4095,10 @@ index 0000000..4b4c533
 +})
 diff --git a/src/util/qidi-box-dry.ts b/src/util/qidi-box-dry.ts
 new file mode 100644
-index 0000000..8240dec
+index 0000000..c9c5fea
 --- /dev/null
 +++ b/src/util/qidi-box-dry.ts
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,91 @@
 +// Plus4 Grease: the Box drying settings and the cool-down lock, worked out the way plus4-grease-box-dry.cfg works
 +// them out, so the card shows what the macros will do. The macros decide; this only follows them.
 +
@@ -4139,6 +4162,14 @@ index 0000000..8240dec
 +  if (!limits.includes(0)) return highest
 +
 +  return settings.plaDrying ? Math.min(highest, settings.plaMaxTemp) : 0
++}
++
++// The highest target a Box heater may be given, by GREASE_BOX_DRY's rule: qidiBoxDryLimit, except that a Box holding PLA
++// or TPU isn't heated during a print (or while one is paused). Null when no loaded filament has a known limit.
++export const qidiBoxHeaterLimit = (limits: number[], settings: QidiBoxDrySettings, printing: boolean): number | null => {
++  const limit = qidiBoxDryLimit(limits, settings)
++
++  return limit != null && printing && limits.includes(0) ? 0 : limit
 +}
 +
 +// A Box holding PLA or TPU is locked for loading them, and no print starts, while minutes of its cool-down are left, or

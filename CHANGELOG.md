@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.13.4
+- **Fixed in the new Fluidd (build 11): the Box heater target showed "Max 0"** in the temperature card, in red, while `GREASE_BOX_DRY` was drying a Box holding PLA, and the Box card's limit line still said the heater was locked at 0 °C. Both used QIDI's limit alone (PLA and TPU are 0). They now follow `GREASE_BOX_DRY`'s rule: with PLA/TPU drying on, a Box holding PLA or TPU may go up to `pla_max_temp` (45 °C), and to 0 while a print is running or paused. Found on the owner's printer. Install with `install.sh fluidd install` and the new zip, `plus4-grease-fluidd-v1.38.1-11.zip`.
+
 ## 0.13.3
 - **Fixed: PLA/TPU drying stayed off** even with `variable_pla_drying: True`. The drying file loaded the settings file with `[include plus4-grease-box-dry-setting[s].cfg]`, and QIDI's Klipper reads section names with Python's own rule, which on the printer's Python 3.7 ends a name at its first `]`. Klipper saw a pattern matching no file and used the defaults, so `GREASE_BOX_DRY` refused PLA ("set variable_pla_drying: True..."). Found on the owner's V2.1.1 printer. The include is now `[include plus4-grease-box-dry-setting?.cfg]`; `install` updates an installed drying file from 0.13.0 to 0.13.2. Your settings file isn't touched.
 - `tests/test_py37_headers.py` checks that every section and include line Plus4 Grease writes reads the same under Python 3.7's rule. Earlier checks ran on a newer Python, which reads the whole name.
