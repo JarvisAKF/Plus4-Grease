@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.0
+- **Personas in the new Fluidd (build 12)**, starting with **Overdrive**. Settings > Theme > Persona gives the whole page a persona's look and puts a status line in the top bar that says what the printer is doing in the persona's voice. Overdrive: near-black with a red accent, Chakra Petch in spaced capitals, cut-corner cards and buttons, segmented progress bars, its own mark in place of the logo, and lines like "SYSTEM › bracket_v3: 41% done. Layer 112 of 270. Holding the line." or a Box's drying and cool-down. Off goes back to Fluidd's own look. The font is bundled, so it needs no internet. Steward, Sidekick, Serene and Sentinel come next.
+- Install with `install.sh fluidd install` and `plus4-grease-fluidd-v1.38.1-12.zip`; your Fluidd settings are kept, and the persona starts Off.
+
 ## 0.13.4
 - **Fixed in the new Fluidd (build 11): the Box heater target showed "Max 0"** in the temperature card, in red, while `GREASE_BOX_DRY` was drying a Box holding PLA, and the Box card's limit line still said the heater was locked at 0 °C. Both used QIDI's limit alone (PLA and TPU are 0). They now follow `GREASE_BOX_DRY`'s rule: with PLA/TPU drying on, a Box holding PLA or TPU may go up to `pla_max_temp` (45 °C), and to 0 while a print is running or paused. Found on the owner's printer. Install with `install.sh fluidd install` and the new zip, `plus4-grease-fluidd-v1.38.1-11.zip`.
 

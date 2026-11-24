@@ -1,3 +1,430 @@
+diff --git a/package.json b/package.json
+index 9078854..717ac6d 100644
+--- a/package.json
++++ b/package.json
+@@ -27,6 +27,7 @@
+   },
+   "dependencies": {
+     "@ctrl/tinycolor": "^4.3.0",
++    "@fontsource/chakra-petch": "5.3.0",
+     "@fontsource/raleway": "^5.3.0",
+     "@fontsource/roboto": "^5.3.0",
+     "@irojs/iro-core": "^1.2.1",
+diff --git a/src/App.vue b/src/App.vue
+index 202a088..350a7b2 100644
+--- a/src/App.vue
++++ b/src/App.vue
+@@ -1,7 +1,7 @@
+ <template>
+   <v-app
+     class="fluidd"
+-    :class="{ 'no-pointer-events': dragState }"
++    :class="[{ 'no-pointer-events': dragState }, personaClass]"
+   >
+     <app-tools-drawer v-model="toolsdrawer" />
+     <app-nav-drawer v-model="navdrawer" />
+@@ -124,6 +124,7 @@ import MmuEditTtgMapDialog from './components/widgets/mmu/MmuEditTtgMapDialog.vu
+ import AfcPrintStartDialog from './components/widgets/afc/dialogs/AfcPrintStartDialog.vue'
+ import type { UpdateResponse } from '@/store/version/types'
+ import type { ConsoleLogEntry } from '@/store/console/types'
++import { persona } from '@/util/persona'
+ 
+ @Component<App>({
+   metaInfo () {
+@@ -160,7 +161,14 @@ export default class App extends Mixins(StateMixin, FilesMixin, BrowserMixin) {
+   }
+ 
+   get showBackgroundLogo () {
+-    return this.theme.backgroundLogo
++    return this.theme.backgroundLogo && !persona(this.theme.persona)
++  }
++
++  // Plus4 Grease: the persona's look, from src/scss/personas.scss.
++  get personaClass (): string {
++    const active = persona(this.theme.persona)
++
++    return active ? `persona persona-${active.id}` : ''
+   }
+ 
+   get logoSrc () {
+diff --git a/src/components/layout/AppBar.vue b/src/components/layout/AppBar.vue
+index 4e396b1..6284b40 100644
+--- a/src/components/layout/AppBar.vue
++++ b/src/components/layout/AppBar.vue
+@@ -7,14 +7,25 @@
+     :height="$globals.HEADER_HEIGHT"
+   >
+     <router-link
+-      v-if="!isMobileViewport"
++      v-if="!isMobileViewport && !personaActive"
+       :to="{ name: 'home' }"
+       class="toolbar-logo"
+     >
+       <app-icon />
+     </router-link>
+ 
+-    <div class="toolbar-title">
++    <router-link
++      v-if="!isMobileViewport && personaActive"
++      :to="{ name: 'home' }"
++      class="toolbar-persona"
++    >
++      <app-persona-mark />
++    </router-link>
++
++    <div
++      class="toolbar-title"
++      :class="{ 'toolbar-title--persona': personaActive }"
++    >
+       <app-btn
+         v-if="isMobileViewport"
+         icon
+@@ -29,11 +40,16 @@
+           {{ instanceName }}
+         </router-link>
+       </v-toolbar-title>
++
++      <app-persona-status v-if="personaActive && !isMobileViewport && socketReady" />
+     </div>
+ 
+     <!-- <v-spacer /> -->
+ 
+-    <div class="toolbar-supplemental">
++    <div
++      class="toolbar-supplemental"
++      :class="{ 'toolbar-supplemental--persona': personaActive }"
++    >
+       <div v-if="socketReady && klippyReady && showSaveConfigAndRestartForPendingChanges">
+         <app-save-config-and-restart-btn
+           :loading="hasWait($waits.onSaveConfig)"
+@@ -241,6 +257,9 @@ import UserPasswordDialog from '@/components/settings/auth/UserPasswordDialog.vu
+ import PendingChangesDialog from '@/components/settings/PendingChangesDialog.vue'
+ import AppSaveConfigAndRestartBtn from './AppSaveConfigAndRestartBtn.vue'
+ import AppUploadAndPrintBtn from './AppUploadAndPrintBtn.vue'
++import AppPersonaMark from './AppPersonaMark.vue'
++import AppPersonaStatus from './AppPersonaStatus.vue'
++import { persona } from '@/util/persona'
+ import { createState } from '@/store/layout/state'
+ import StateMixin from '@/mixins/state'
+ import ServicesMixin from '@/mixins/services'
+@@ -257,7 +276,9 @@ import type { AppUser } from '@/store/auth/types'
+     UserPasswordDialog,
+     PendingChangesDialog,
+     AppSaveConfigAndRestartBtn,
+-    AppUploadAndPrintBtn
++    AppUploadAndPrintBtn,
++    AppPersonaMark,
++    AppPersonaStatus
+   }
+ })
+ export default class AppBar extends Mixins(StateMixin, ServicesMixin, FilesMixin, BrowserMixin) {
+@@ -265,6 +286,11 @@ export default class AppBar extends Mixins(StateMixin, ServicesMixin, FilesMixin
+   userPasswordDialogOpen = false
+   pendingChangesDialogOpen = false
+ 
++  // Plus4 Grease: with a persona on, its mark and status line take the logo's place.
++  get personaActive (): boolean {
++    return persona(this.$typedState.config.uiSettings.theme.persona) != null
++  }
++
+   get supportsAuth (): boolean {
+     return this.$typedGetters['server/componentSupport']('authorization')
+   }
+@@ -522,6 +548,30 @@ export default class AppBar extends Mixins(StateMixin, ServicesMixin, FilesMixin
+     padding-left: 16px;
+   }
+ 
++  .toolbar-persona {
++    display: flex;
++    align-items: center;
++    height: inherit;
++    padding: 0 12px;
++    text-decoration: none;
++    border-right: thin solid rgba(255, 255, 255, 0.08);
++  }
++
++  .toolbar-title.toolbar-title--persona {
++    flex: 1 1 0;
++    min-width: 0;
++    max-width: none;
++  }
++
++  .toolbar-title--persona .printer-title {
++    flex: 0 0 auto;
++  }
++
++  .toolbar-supplemental.toolbar-supplemental--persona {
++    flex: 0 0 auto;
++    max-width: none;
++  }
++
+   .toolbar-supplemental {
+     display: flex;
+     justify-content: flex-end;
+diff --git a/src/components/layout/AppPersonaMark.vue b/src/components/layout/AppPersonaMark.vue
+new file mode 100644
+index 0000000..26ce768
+--- /dev/null
++++ b/src/components/layout/AppPersonaMark.vue
+@@ -0,0 +1,70 @@
++<template>
++  <div class="persona-mark">
++    <svg
++      width="30"
++      height="22"
++      viewBox="0 0 30 22"
++      fill="none"
++      stroke="currentColor"
++      stroke-width="3"
++      stroke-linejoin="miter"
++      aria-hidden="true"
++      class="persona-mark__logo"
++    >
++      <path d="M2 2l9 9-9 9M13 2l9 9-9 9" />
++      <path d="M24 20h5" />
++    </svg>
++    <div class="persona-mark__text">
++      <span class="persona-mark__name">PLUS4 GREASE</span>
++      <span class="persona-mark__tagline">{{ tagline }}</span>
++    </div>
++  </div>
++</template>
++
++<script lang="ts">
++import { Component, Vue } from 'vue-property-decorator'
++import type { ThemeConfig } from '@/store/config/types'
++import { persona } from '@/util/persona'
++
++// Plus4 Grease: the persona's mark in the top bar, in place of the theme's logo.
++@Component({})
++export default class AppPersonaMark extends Vue {
++  get theme (): ThemeConfig {
++    return this.$typedState.config.uiSettings.theme
++  }
++
++  get tagline (): string {
++    return persona(this.theme.persona)?.tagline ?? ''
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++  .persona-mark {
++    display: flex;
++    align-items: center;
++    gap: 10px;
++    padding: 0 8px;
++    color: var(--v-primary-base);
++  }
++
++  .persona-mark__text {
++    display: flex;
++    flex-direction: column;
++    gap: 2px;
++    line-height: 1;
++  }
++
++  .persona-mark__name {
++    font-size: 15px;
++    font-weight: 700;
++    letter-spacing: 0.24em;
++  }
++
++  .persona-mark__tagline {
++    font-size: 10px;
++    font-weight: 600;
++    letter-spacing: 0.2em;
++    color: #9C9CA6;
++  }
++</style>
+diff --git a/src/components/layout/AppPersonaStatus.vue b/src/components/layout/AppPersonaStatus.vue
+new file mode 100644
+index 0000000..086cefc
+--- /dev/null
++++ b/src/components/layout/AppPersonaStatus.vue
+@@ -0,0 +1,113 @@
++<template>
++  <div
++    v-if="line"
++    class="persona-status"
++    role="status"
++    :title="line"
++  >
++    <span class="persona-status__label">{{ label }}</span>
++    <span class="persona-status__text">{{ line }}</span>
++  </div>
++</template>
++
++<script lang="ts">
++import { Component, Mixins } from 'vue-property-decorator'
++import StateMixin from '@/mixins/state'
++import type { ThemeConfig } from '@/store/config/types'
++import type { Heater } from '@/store/printer/types'
++import { persona, personaStatusLine, type PersonaBox, type PersonaStatus } from '@/util/persona'
++import { qidiBoxCooling, qidiBoxDrySettings } from '@/util/qidi-box-dry'
++
++// Plus4 Grease: the persona's line in the top bar, saying what the printer is doing.
++@Component({})
++export default class AppPersonaStatus extends Mixins(StateMixin) {
++  get theme (): ThemeConfig {
++    return this.$typedState.config.uiSettings.theme
++  }
++
++  get label (): string {
++    return persona(this.theme.persona)?.label ?? ''
++  }
++
++  get boxes (): PersonaBox[] {
++    const printer = this.$typedState.printer.printer
++    const settings = qidiBoxDrySettings(printer['gcode_macro _GREASE_BOX_DRY_SETTINGS'])
++    const count: number = this.$typedGetters['qidiBox/getBoxCount'] ?? 0
++    const boxes: PersonaBox[] = []
++
++    for (let box = 1; box <= count; box++) {
++      const state = printer[`gcode_macro _GREASE_BOX_DRY_${box}`]
++
++      if (state == null) continue
++
++      const temperature: number | null = printer[`heater_generic heater_box${box}`]?.temperature ?? null
++      const cooling = qidiBoxCooling(state, temperature, settings)
++
++      boxes.push({
++        box,
++        drying: Number(state.active ?? 0) === 1,
++        dryTemp: Number(state.temp ?? 0) || null,
++        locked: cooling.locked,
++        coolMinutes: cooling.minutes,
++        temperature
++      })
++    }
++
++    return boxes
++  }
++
++  get status (): PersonaStatus {
++    const printer = this.$typedState.printer.printer
++    const heaters: Heater[] = this.$typedGetters['printer/getHeaters'] ?? []
++    const layers: number = this.$typedGetters['printer/getPrintLayers'] ?? 0
++
++    return {
++      klippyReady: this.klippyReady,
++      state: printer.print_stats?.state ?? '',
++      filename: printer.print_stats?.filename ?? '',
++      progress: this.$typedGetters['printer/getPrintProgress'] ?? 0,
++      layer: layers > 0 ? this.$typedGetters['printer/getPrintLayer'] : null,
++      totalLayers: layers > 0 ? layers : null,
++      speedFactor: printer.gcode_move?.speed_factor ?? 1,
++      heaters: heaters.map(heater => ({
++        name: heater.prettyName,
++        temperature: heater.temperature,
++        target: heater.target
++      })),
++      boxes: this.boxes
++    }
++  }
++
++  get line (): string {
++    return personaStatusLine(this.theme.persona, this.status)
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++  .persona-status {
++    display: flex;
++    align-items: baseline;
++    gap: 8px;
++    min-width: 0;
++    flex: 1 1 auto;
++    margin: 0 12px;
++    font-size: 13px;
++    font-weight: 500;
++    white-space: nowrap;
++    overflow: hidden;
++  }
++
++  .persona-status__label {
++    flex-shrink: 0;
++    font-weight: 700;
++    letter-spacing: 0.14em;
++    color: var(--v-primary-base);
++  }
++
++  .persona-status__text {
++    overflow: hidden;
++    text-overflow: ellipsis;
++    opacity: 0.85;
++  }
++</style>
+diff --git a/src/components/settings/ThemeSettings.vue b/src/components/settings/ThemeSettings.vue
+index 85b1485..be1e775 100644
+--- a/src/components/settings/ThemeSettings.vue
++++ b/src/components/settings/ThemeSettings.vue
+@@ -8,6 +8,27 @@
+       dense
+       class="mb-4"
+     >
++      <app-setting>
++        <template #title>
++          <span>{{ $t('app.setting.label.persona') }}</span>
++          <app-inline-help
++            bottom
++            small
++            :tooltip="$t('app.setting.tooltip.persona')"
++          />
++        </template>
++        <v-select
++          v-model="persona"
++          filled
++          dense
++          single-line
++          hide-details="auto"
++          :items="personas"
++        />
++      </app-setting>
++
++      <v-divider />
++
+       <app-setting>
+         <template #title>
+           <span>{{ $t('app.setting.label.theme_preset') }}</span>
+@@ -78,6 +99,7 @@ import { Component, Mixins } from 'vue-property-decorator'
+ import StateMixin from '@/mixins/state'
+ import type { ThemePreset, ThemeConfig } from '@/store/config/types'
+ import ThemePicker from '../ui/AppColorPicker.vue'
++import { PERSONAS, persona } from '@/util/persona'
+ 
+ @Component({
+   components: {
+@@ -89,6 +111,28 @@ export default class ThemeSettings extends Mixins(StateMixin) {
+     return this.$typedState.config.uiSettings.theme
+   }
+ 
++  get personas (): { text: string, value: string }[] {
++    return [
++      { text: this.$t('app.setting.label.persona_off').toString(), value: 'none' },
++      ...PERSONAS.map(p => ({ text: p.name, value: p.id }))
++    ]
++  }
++
++  get persona (): string {
++    return persona(this.theme.persona) ? this.theme.persona as string : 'none'
++  }
++
++  // A persona brings its own color in dark mode; Off goes back to the preset's color and keeps dark mode as it is.
++  set persona (value: string) {
++    const picked = persona(value)
++
++    if (picked) {
++      this.updateTheme({ persona: picked.id, color: picked.color, isDark: true })
++    } else {
++      this.updateTheme({ persona: 'none', ...(this.themePreset ? { color: this.themePreset.color } : {}) })
++    }
++  }
++
+   get themePresets (): ThemePreset[] {
+     return this.$typedState.config.hostConfig.themePresets
+   }
 diff --git a/src/components/widgets/qidiBox/QidiBoxCard.vue b/src/components/widgets/qidiBox/QidiBoxCard.vue
 new file mode 100644
 index 0000000..2fc1887
@@ -2562,10 +2989,29 @@ index ed39791..d4b391b 100644
  
  export const SupportedLocales = Object.freeze([
 diff --git a/src/locales/en.yaml b/src/locales/en.yaml
-index 217e550..f57b5e7 100644
+index 217e550..7599a76 100644
 --- a/src/locales/en.yaml
 +++ b/src/locales/en.yaml
-@@ -1456,6 +1456,252 @@ app:
+@@ -896,6 +896,8 @@ app:
+       solid: Solid
+       starts_with: Starts with
+       theme_preset: Community preset
++      persona: Persona
++      persona_off: "Off: Fluidd's own look"
+       thermal_preset_gcode: GCode
+       thermal_preset_name: Preset Name
+       title: Title
+@@ -957,6 +959,9 @@ app:
+         dialog if running BED_SCREWS_ADJUST tool
+       show_screws_tilt_adjust_dialog_automatically: Automatically shows helper
+         dialog if running SCREWS_TILT_CALCULATE tool
++      persona: >-
++        Plus4 Grease: a look for the whole page, with a status line in the top bar that says what the printer
++        is doing. Picking one sets the primary color and dark mode; Off keeps them.
+       theme_disclaimer: >-
+         These themes feature brand names and logos that are the intellectual property
+         of their respective owners.<br>
+@@ -1456,6 +1461,252 @@ app:
        show_logos: Show Logos
        show_climate: Show Climate Info
        show_unavailable_spool_color: Show Unavailable Spools
@@ -2859,6 +3305,255 @@ index 0000000..f2f6d2f
 +    }
 +  }
 +}
+diff --git a/src/scss/global.scss b/src/scss/global.scss
+index 425d368..3e16881 100644
+--- a/src/scss/global.scss
++++ b/src/scss/global.scss
+@@ -20,3 +20,4 @@
+ @import "./inputs";
+ @import "./lists";
+ @import "./tables";
++@import "./personas";
+diff --git a/src/scss/personas.scss b/src/scss/personas.scss
+new file mode 100644
+index 0000000..0992887
+--- /dev/null
++++ b/src/scss/personas.scss
+@@ -0,0 +1,170 @@
++// Plus4 Grease personas (Settings > Theme > Persona). Each look applies only under its class on the app root
++// (persona-<id>, set in App.vue), so Fluidd's own look is untouched while the persona is Off. The colors of the top
++// bar, the drawer, card headings and buttons come from Vuetify's theme (src/util/persona.ts); the rest is here.
++
++// Latin only: the printer serves these from its own disk, no internet needed.
++@import "@fontsource/chakra-petch/latin-500.css";
++@import "@fontsource/chakra-petch/latin-600.css";
++@import "@fontsource/chakra-petch/latin-700.css";
++
++@mixin persona-chamfer($size) {
++  clip-path: polygon(#{$size} 0, 100% 0, 100% calc(100% - #{$size}), calc(100% - #{$size}) 100%, 0 100%, 0 #{$size});
++}
++
++// Vuetify's typography classes set their own font with !important.
++$persona-type-classes: '.text-h1, .text-h2, .text-h3, .text-h4, .text-h5, .text-h6, .text-subtitle-1, .text-subtitle-2, .text-body-1, .text-body-2, .text-button, .text-caption, .text-overline, .display-4, .display-3, .display-2, .display-1, .headline, .title, .subheading, .subtitle-1, .subtitle-2, .body-1, .body-2, .caption, .overline';
++
++// ---------------------------------------------------------------- Overdrive
++$od-bg: #070708;
++$od-card: #0E0E11;
++$od-raised: #141418;
++$od-btn: #18181D;
++$od-line: #1C1C22;
++$od-text: #F2F2F4;
++$od-muted: #9C9CA6;
++$od-font: 'Chakra Petch', system-ui, sans-serif;
++
++.v-application.persona-overdrive {
++  font-family: $od-font;
++  font-weight: 500;
++  color: $od-text;
++  background: $od-bg !important;
++
++  #{$persona-type-classes} {
++    font-family: $od-font !important;
++  }
++
++  // Console, editor and code keep their fixed-width font.
++  code, pre, kbd {
++    font-family: monospace !important;
++  }
++
++  .v-main {
++    background: $od-bg;
++  }
++
++  // Top bar: the printer name small and spaced, like the rest of the labels.
++  .printer-title {
++    font-family: $od-font !important;
++    font-size: 13px !important;
++    font-weight: 600 !important;
++    letter-spacing: 0.12em;
++    text-transform: uppercase;
++  }
++
++  .v-app-bar.v-toolbar {
++    box-shadow: none !important;
++    border-bottom: 1px solid $od-line;
++  }
++
++  // Side menu: spaced capitals, the open page marked with the accent on its left edge.
++  .v-navigation-drawer {
++    background-color: #0B0B0D !important;
++    border-right: 1px solid $od-line;
++
++    .v-navigation-drawer__border {
++      display: none;
++    }
++
++    // The Settings page's section list has Fluidd's grey set on it directly.
++    .v-list {
++      background-color: #0B0B0D !important;
++    }
++
++    .v-list-item {
++      border-left: 3px solid transparent;
++      border-radius: 0 !important;
++    }
++
++    .v-list-item--active {
++      border-left-color: var(--v-primary-base);
++      background: $od-btn;
++    }
++
++    .v-list-item__title,
++    .v-list-item .text-caption {
++      font-weight: 600;
++      letter-spacing: 0.12em;
++      text-transform: uppercase;
++    }
++  }
++
++  // Cards: flat panels with the top-left and bottom-right corners cut.
++  .v-card.theme--dark {
++    background-color: $od-card;
++    box-shadow: none !important;
++    border-radius: 0 !important;
++    @include persona-chamfer(14px);
++  }
++
++  .v-dialog > .v-card,
++  .v-menu__content .v-card {
++    @include persona-chamfer(10px);
++  }
++
++  .collapsable-card-title,
++  .v-card__title {
++    font-family: $od-font !important;
++    font-size: 0.8rem !important;
++    font-weight: 700 !important;
++    letter-spacing: 0.2em !important;
++    text-transform: uppercase;
++    color: $od-muted;
++  }
++
++  .collapsable-card-title .v-icon {
++    color: var(--v-primary-base) !important;
++  }
++
++  .v-subheader {
++    font-weight: 700;
++    letter-spacing: 0.16em;
++    text-transform: uppercase;
++  }
++
++  .theme--dark.v-divider {
++    border-color: $od-line !important;
++  }
++
++  // Buttons: square, cut corners, spaced capitals. Round icon buttons stay round.
++  .v-btn:not(.v-btn--icon):not(.v-btn--fab) {
++    border-radius: 0 !important;
++    font-weight: 700;
++    letter-spacing: 0.12em;
++    @include persona-chamfer(7px);
++  }
++
++  .v-btn-toggle {
++    border-radius: 0 !important;
++  }
++
++  .v-chip {
++    border-radius: 0 !important;
++    font-weight: 600;
++    letter-spacing: 0.08em;
++    @include persona-chamfer(5px);
++  }
++
++  // Inputs: square.
++  .v-text-field--filled > .v-input__control > .v-input__slot,
++  .v-text-field--outlined fieldset,
++  .v-text-field--solo > .v-input__control > .v-input__slot {
++    border-radius: 0 !important;
++  }
++
++  // Progress bars in cards: split into 40 segments.
++  .v-card .v-progress-linear {
++    -webkit-mask-image: repeating-linear-gradient(90deg, #000 0, #000 calc(2.5% - 3px), transparent calc(2.5% - 3px), transparent 2.5%);
++    mask-image: repeating-linear-gradient(90deg, #000 0, #000 calc(2.5% - 3px), transparent calc(2.5% - 3px), transparent 2.5%);
++  }
++
++  // Numbers line up as they change.
++  .v-data-table td,
++  .v-card__text {
++    font-variant-numeric: tabular-nums;
++  }
++
++  .text--secondary {
++    color: $od-muted !important;
++  }
++}
+diff --git a/src/store/config/actions.ts b/src/store/config/actions.ts
+index 3ff8f17..cc4fbd4 100644
+--- a/src/store/config/actions.ts
++++ b/src/store/config/actions.ts
+@@ -8,6 +8,14 @@ import { Waits } from '@/globals'
+ import type { FileFilterType } from '../files/types'
+ import { TinyColor } from '@ctrl/tinycolor'
+ import dbKey from '@/util/db-key'
++import { persona } from '@/util/persona'
++
++// Fluidd's own values of the colors a Plus4 Grease persona replaces, kept to put back when it's turned off.
++const PERSONA_COLOR_KEYS = ['appbar', 'drawer', 'card-heading', 'btncolor'] as const
++const FLUIDD_COLORS = {
++  dark: { ...vuetify.framework.theme.themes.dark },
++  light: { ...vuetify.framework.theme.themes.light }
++}
+ 
+ export const actions = {
+   /**
+@@ -40,6 +48,17 @@ export const actions = {
+   async onThemeChange (_, payload: ThemeConfig) {
+     const vuetifyTheme = vuetify.framework.theme
+ 
++    // Plus4 Grease: a persona sets the bar, drawer, card heading and button colors; Fluidd's own come back without one.
++    const active = persona(payload.persona)
++
++    for (const mode of ['dark', 'light'] as const) {
++      const theme = vuetifyTheme.themes[mode]
++
++      for (const key of PERSONA_COLOR_KEYS) {
++        theme[key] = active?.colors[key] ?? FLUIDD_COLORS[mode][key]
++      }
++    }
++
+     vuetifyTheme.dark = payload.isDark
+     vuetifyTheme.currentTheme.primary = payload.color
+     vuetifyTheme.currentTheme['primary-offset'] = new TinyColor(payload.color)
+diff --git a/src/store/config/state.ts b/src/store/config/state.ts
+index 319ad0d..8ccac0d 100644
+--- a/src/store/config/state.ts
++++ b/src/store/config/state.ts
+@@ -77,7 +77,8 @@ export const createState = (): ConfigState => {
+           src: 'logo_fluidd.svg'
+         },
+         color: '#2196F3',
+-        backgroundLogo: true
++        backgroundLogo: true,
++        persona: 'none'
+       },
+       warnings: {
+         warnOnCpuThrottled: true,
+diff --git a/src/store/config/types.ts b/src/store/config/types.ts
+index b867a9d..344a10f 100644
+--- a/src/store/config/types.ts
++++ b/src/store/config/types.ts
+@@ -171,6 +171,8 @@ export interface ThemeConfig {
+   isDark: boolean;
+   logo: ThemeLogo;
+   backgroundLogo: boolean;
++  // Plus4 Grease: a persona's look ('none' for Fluidd's own), see src/util/persona.ts.
++  persona?: string;
+ }
+ 
+ // Config defined in host
 diff --git a/src/store/index.ts b/src/store/index.ts
 index a14922c..d2e329f 100644
 --- a/src/store/index.ts
@@ -3273,6 +3968,97 @@ index 8b4293a..942925c 100644
  }
  
  type RootStateType<TModules> = {
+diff --git a/src/util/__tests__/persona.spec.ts b/src/util/__tests__/persona.spec.ts
+new file mode 100644
+index 0000000..5f177c4
+--- /dev/null
++++ b/src/util/__tests__/persona.spec.ts
+@@ -0,0 +1,85 @@
++import { describe, expect, it } from 'vitest'
++import { PERSONAS, persona, personaStatusLine, type PersonaStatus } from '../persona'
++
++const idle: PersonaStatus = {
++  klippyReady: true,
++  state: 'standby',
++  filename: '',
++  progress: 0,
++  layer: null,
++  totalLayers: null,
++  speedFactor: 1,
++  heaters: [
++    { name: 'Extruder', temperature: 25, target: 0 },
++    { name: 'Heater Bed', temperature: 24, target: 0 }
++  ],
++  boxes: []
++}
++
++const line = (status: Partial<PersonaStatus>) => personaStatusLine('overdrive', { ...idle, ...status })
++
++describe('Plus4 Grease personas', () => {
++  it('finds a persona by id, and none for Off or an unknown one', () => {
++    expect(persona('overdrive')?.name).toBe('Overdrive')
++    expect(persona('none')).toBeUndefined()
++    expect(persona(undefined)).toBeUndefined()
++    expect(persona('jarvis')).toBeUndefined()
++  })
++
++  it('sets only the four theme colors the settings put back', () => {
++    for (const p of PERSONAS) {
++      expect(Object.keys(p.colors).sort()).toEqual(['appbar', 'btncolor', 'card-heading', 'drawer'])
++    }
++  })
++
++  it('says nothing with the persona off', () => {
++    expect(personaStatusLine('none', idle)).toBe('')
++  })
++})
++
++describe('Overdrive status line', () => {
++  it('idles', () => {
++    expect(line({})).toBe('Idle. Systems armed. Give me something to print.')
++  })
++
++  it('reports Klipper down before anything else', () => {
++    expect(line({ klippyReady: false, state: 'printing' })).toMatch(/^Klipper is down/)
++  })
++
++  it('reports a print with its progress, layers and speed', () => {
++    expect(line({ state: 'printing', filename: 'parts/bracket_v3.gcode', progress: 0.416, layer: 112, totalLayers: 270 }))
++      .toBe('bracket_v3: 41% done. Layer 112 of 270. Holding the line.')
++    expect(line({ state: 'printing', filename: 'a.gcode', progress: 0.5, speedFactor: 1.5 }))
++      .toBe('a: 50% done. Running at 150%.')
++  })
++
++  it('reports heating at the start of a print', () => {
++    expect(line({
++      state: 'printing',
++      filename: 'a.gcode',
++      heaters: [{ name: 'Heater Bed', temperature: 61.4, target: 100 }]
++    })).toBe('Heating Heater Bed: 61 of 100°C. Then we go.')
++  })
++
++  it('reports paused, done, cancelled and error', () => {
++    expect(line({ state: 'paused', filename: 'a.gcode', progress: 0.3 })).toBe('a paused at 30%. Waiting on you.')
++    expect(line({ state: 'complete', filename: 'a.gcode' })).toBe('a done. Clear the plate. Next.')
++    expect(line({ state: 'cancelled', filename: 'a.gcode' })).toBe('a cancelled. Clear the plate.')
++    expect(line({ state: 'error' })).toMatch(/error/)
++  })
++
++  it('reports Box drying, then the cool-down lock, when idle', () => {
++    const box = { box: 1, drying: false, dryTemp: null, locked: false, coolMinutes: 0, temperature: 30 }
++
++    expect(line({ boxes: [{ ...box, drying: true, dryTemp: 45 }] })).toBe('Box 1 drying at 45°C. Moisture is the enemy.')
++    expect(line({ boxes: [{ ...box, locked: true, coolMinutes: 12, temperature: 41.6 }] }))
++      .toBe('Box 1 cooling at 42°C. PLA and TPU stay locked. 12 min left.')
++    expect(line({ boxes: [box] })).toMatch(/^Idle/)
++  })
++
++  it('reports heaters warming up when idle', () => {
++    expect(line({ heaters: [{ name: 'Extruder', temperature: 150, target: 220 }] }))
++      .toBe('Heating Extruder: 150 of 220°C.')
++    expect(line({ heaters: [{ name: 'Extruder', temperature: 219, target: 220 }] })).toMatch(/^Idle/)
++  })
++})
 diff --git a/src/util/__tests__/qidi-box-flow.spec.ts b/src/util/__tests__/qidi-box-flow.spec.ts
 new file mode 100644
 index 0000000..87ee604
@@ -4093,6 +4879,146 @@ index 0000000..4b4c533
 +    expect(qidiBoxToolButtons({ 0: 0, 1: 1 }, slots, null, 1).some(button => button.active)).toBe(false)
 +  })
 +})
+diff --git a/src/util/persona.ts b/src/util/persona.ts
+new file mode 100644
+index 0000000..7c436ba
+--- /dev/null
++++ b/src/util/persona.ts
+@@ -0,0 +1,134 @@
++// Plus4 Grease personas: a look for the whole page (colors, font, card shapes, logo) and a status line in the top
++// bar that says what the printer is doing in the persona's voice. Picked in Settings > Theme; 'none' is Fluidd's own
++// look. The line only reports what the printer state already shows; it never decides anything.
++
++export type PersonaId = 'none' | 'overdrive'
++
++export interface Persona {
++  id: Exclude<PersonaId, 'none'>;
++  name: string;
++  // Sets the theme's primary color and Vuetify's custom colors while the persona is on.
++  color: string;
++  colors: Record<string, string>;
++  // Shown under the logo and as the status line's label.
++  tagline: string;
++  label: string;
++}
++
++export const PERSONAS: Persona[] = [
++  {
++    id: 'overdrive',
++    name: 'Overdrive',
++    color: '#FF3D2E',
++    colors: {
++      appbar: '#0B0B0D',
++      drawer: '#0B0B0D',
++      'card-heading': '#141418',
++      btncolor: '#18181D'
++    },
++    tagline: 'OVERDRIVE',
++    label: 'SYSTEM ›'
++  }
++]
++
++export const persona = (id: string | null | undefined): Persona | undefined => PERSONAS.find(p => p.id === id)
++
++export interface PersonaBox {
++  box: number;
++  drying: boolean;
++  dryTemp: number | null;
++  // The cool-down lock: minutes left, or 0; locked while minutes are left or it's above unlock_temp after heating.
++  locked: boolean;
++  coolMinutes: number;
++  temperature: number | null;
++}
++
++export interface PersonaHeater {
++  name: string;
++  temperature: number;
++  target: number;
++}
++
++export interface PersonaStatus {
++  klippyReady: boolean;
++  // print_stats.state: standby, printing, paused, complete, cancelled, error.
++  state: string;
++  filename: string;
++  // 0 to 1.
++  progress: number;
++  layer: number | null;
++  totalLayers: number | null;
++  speedFactor: number;
++  heaters: PersonaHeater[];
++  boxes: PersonaBox[];
++}
++
++const percent = (value: number) => `${Math.floor(Math.max(0, Math.min(1, value)) * 100)}%`
++
++const shortName = (filename: string) => {
++  const base = filename.split('/').pop() ?? filename
++
++  return base.replace(/\.gcode$/i, '')
++}
++
++// A heater still more than 3 degrees short of its target counts as heating up.
++const heatingUp = (heaters: PersonaHeater[]) => heaters.find(h => h.target > 0 && h.temperature < h.target - 3)
++
++const overdrive = (s: PersonaStatus): string => {
++  if (!s.klippyReady) return 'Klipper is down. Nothing moves until it is back.'
++
++  const name = shortName(s.filename)
++  const layers = s.layer != null && s.totalLayers ? ` Layer ${s.layer} of ${s.totalLayers}.` : ''
++  const speed = Math.round(s.speedFactor * 100)
++
++  switch (s.state) {
++    case 'printing': {
++      const heating = heatingUp(s.heaters)
++
++      if (s.progress <= 0 && heating) {
++        return `Heating ${heating.name}: ${Math.round(heating.temperature)} of ${Math.round(heating.target)}°C. Then we go.`
++      }
++
++      return `${name}: ${percent(s.progress)} done.${layers}${speed === 100 ? ' Holding the line.' : ` Running at ${speed}%.`}`
++    }
++    case 'paused':
++      return `${name} paused at ${percent(s.progress)}. Waiting on you.`
++    case 'complete':
++      return `${name} done. Clear the plate. Next.`
++    case 'cancelled':
++      return `${name} cancelled. Clear the plate.`
++    case 'error':
++      return 'Print stopped on an error. Check the console.'
++  }
++
++  const cooling = s.boxes.find(b => b.locked)
++  const drying = s.boxes.find(b => b.drying)
++
++  if (drying) {
++    return `Box ${drying.box} drying${drying.dryTemp ? ` at ${drying.dryTemp}°C` : ''}. Moisture is the enemy.`
++  }
++
++  if (cooling) {
++    const now = cooling.temperature != null ? `${Math.round(cooling.temperature)}°C` : 'warm'
++    const wait = cooling.coolMinutes > 0 ? ` ${cooling.coolMinutes} min left.` : ''
++
++    return `Box ${cooling.box} cooling at ${now}. PLA and TPU stay locked.${wait}`
++  }
++
++  const heating = heatingUp(s.heaters)
++
++  if (heating) {
++    return `Heating ${heating.name}: ${Math.round(heating.temperature)} of ${Math.round(heating.target)}°C.`
++  }
++
++  return 'Idle. Systems armed. Give me something to print.'
++}
++
++export const personaStatusLine = (id: string | null | undefined, status: PersonaStatus): string => {
++  switch (id) {
++    case 'overdrive':
++      return overdrive(status)
++    default:
++      return ''
++  }
++}
 diff --git a/src/util/qidi-box-dry.ts b/src/util/qidi-box-dry.ts
 new file mode 100644
 index 0000000..c9c5fea
