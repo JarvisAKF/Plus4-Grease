@@ -16,13 +16,14 @@ If you want it, it also adds a current Fluidd on its own port next to QIDI's, wh
 
 It also brings read-only tools for finding out what a Plus 4 is doing: a speed test, a Klipper report that explains shutdowns like "Timer too close" and "Lost communication", and a comparison of your config with QIDI's stock one.
 
-The ideas come from [Valve Oil](https://github.com/thelegendtubaguy/valve-oil), which does this for QIDI's Max 4, Plus 5 and Smart 5. Plus4 Grease is a separate project, written for the Plus 4's older software: Klipper on Python 3.7, Debian 10, and the `mks` user. This is version 0.13.
+The ideas come from [Valve Oil](https://github.com/thelegendtubaguy/valve-oil), which does this for QIDI's Max 4, Plus 5 and Smart 5. Plus4 Grease is a separate project, written for the Plus 4's older software: Klipper on Python 3.7, Debian 10, and the `mks` user. This is version 0.14.
 
 ## Plus4 Grease vs stock QIDI
 
 | | Stock QIDI V2.1.1 | With Plus4 Grease |
 |---|---|---|
 | Clearing the Box runout flags at print start | 16 flags with a 0.1 s wait after each: 1.6 s | no waits; each save already finishes before the next command runs |
+| Purging at print start with a Box (`EXTRUSION_AND_FLUSH`) | 5 purges, about 290 mm, each round with a 6 s fan pause and a wipe | 2 purges, about 110 mm: roughly a minute faster. `CLEAR_NOZZLE` is unchanged. A dark-to-light start can leave a faint tint in the first lines |
 | Saving a new bed mesh (`G29`) | a fixed 5 s wait first | 0.5 s, as Valve Oil does on the Max 4 and Plus 5 |
 | Z tilt: travel between probe points | 150 mm/s | 300 mm/s; each 255 mm trip takes about 0.9 s instead of 1.7 s |
 | Bed mesh: travel between probe points | 150 mm/s | 300 mm/s; a full 9×9 mesh spends about 8 s less moving |

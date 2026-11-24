@@ -176,6 +176,40 @@ FEATURES = (
         ),
     ),
     Feature(
+        id="box_start_flush",
+        title="Print start: 2 Box purges instead of 5 (about 110 mm instead of 290)",
+        detail=(
+            "With a Box, QIDI's EXTRUSION_AND_FLUSH purges about 50 mm and then runs 4 more rounds of 60 mm, "
+            "each with a 6 s fan pause and a wipe: about 290 mm of filament before CLEAR_NOZZLE purges another "
+            "85 mm. This keeps the first purge and one round (about 110 mm), which saves 3 rounds, roughly a "
+            "minute per print. CLEAR_NOZZLE is unchanged. Going from a dark filament to a light one at print "
+            "start can leave a faint tint in the first lines; color changes during a print use the slicer's "
+            "flushing volumes and aren't affected."
+        ),
+        source="Plus4 Grease; JarvisAKF's own setting, which QIDI's 2.1.1 update had put back to stock.",
+        edits=(
+            Edit(
+                file="gcode_macro.cfg",
+                find=(
+                    "    G1 E-2 F1800\n"
+                    "    {% for i in range(1,5) %}\n"
+                    "        M106 S255\n"
+                    "        M400\n"
+                    "        G4 P6000\n"
+                    "        CLEAR_FLUSH\n"
+                ),
+                replace=(
+                    "    G1 E-2 F1800\n"
+                    "    {% for i in range(1,2) %}\n"
+                    "        M106 S255\n"
+                    "        M400\n"
+                    "        G4 P6000\n"
+                    "        CLEAR_FLUSH\n"
+                ),
+            ),
+        ),
+    ),
+    Feature(
         id="bed_mesh_save_dwell",
         title="Bed mesh: 0.5 s instead of 5 s before saving a new mesh",
         detail=(

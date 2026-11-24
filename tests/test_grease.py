@@ -166,15 +166,28 @@ class EditTests(unittest.TestCase):
         self.assertEqual(core.feature_status(texts, [f for f in FEATURES if f.id == "board_fan"][0]),
                          "skipped")
 
-    def test_macro_changes_only_trim_dwells(self):
+    def test_macro_changes_only_trim_dwells_and_flush_rounds(self):
         texts = stock_texts()
         for feature in DEFAULTS:
             core.apply_feature(texts, feature)
         before, after = stock_text().splitlines(), texts["gcode_macro.cfg"].splitlines()
         removed = [line for line in before if line not in after]
         added = [line for line in after if line not in before]
-        self.assertEqual({line.strip() for line in removed}, {"G4 P100", "G4 P5000"})
-        self.assertEqual({line.strip() for line in added}, {"G4 P500"})
+        self.assertEqual({line.strip() for line in removed},
+                         {"G4 P100", "G4 P5000", "{% for i in range(1,5) %}"})
+        self.assertEqual({line.strip() for line in added}, {"G4 P500", "{% for i in range(1,2) %}"})
+
+    def test_box_start_flush_runs_one_round(self):
+        flush = next(f for f in FEATURES if f.id == "box_start_flush")
+        texts = stock_texts()
+        core.apply_feature(texts, flush)
+        text = texts["gcode_macro.cfg"]
+        start = text.index("[gcode_macro EXTRUSION_AND_FLUSH]")
+        macro = text[start:text.index("\n[", start + 1)]
+        self.assertEqual(macro.count("range(1,2)"), 1)
+        self.assertNotIn("range(1,5)", text)
+        self.assertEqual(macro.count("CLEAR_FLUSH"), 2)
+        self.assertIn("CLEAR_NOZZLE HOTEND={hotendtemp}", text)
 
     def test_printer_cfg_changes_only_the_z_tilt_and_bed_mesh_speeds(self):
         texts = stock_texts()
@@ -221,7 +234,8 @@ class EditTests(unittest.TestCase):
     def test_feature_with_one_changed_block_is_left_alone_whole(self):
         changed = stock_text().replace("            _BED_MESH_CALIBRATE PROFILE=default\n",
                                        "            BEACON_MESH PROFILE=default\n")
-        self.assertEqual(core.feature_status({"gcode_macro.cfg": changed}, FEATURES[1]), "skipped")
+        mesh_dwell = next(f for f in FEATURES if f.id == "bed_mesh_save_dwell")
+        self.assertEqual(core.feature_status({"gcode_macro.cfg": changed}, mesh_dwell), "skipped")
 
     def test_crlf_file_is_left_alone(self):
         texts = {"gcode_macro.cfg": stock_text().replace("\n", "\r\n")}

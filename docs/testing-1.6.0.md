@@ -13,6 +13,7 @@ QIDI's 1.6.0 (November 2024) is the Plus 4 from before the QIDI Box, so Plus4 Gr
 | `--board-fan` | opt-in |
 | `--balanced-chamber` | opt-in |
 | Print start: no 1.6 s wait clearing the Box runout flags | not offered: that loop isn't in 1.6.0 |
+| Print start: 2 Box purges instead of 5 | not offered: 1.6.0 has no `EXTRUSION_AND_FLUSH` |
 | `--box-dry` (drying, print-start check, cool-down lock) | not offered: 1.6.0 has no Box support |
 | New Fluidd on port 81 | the same as on other firmware; the Box card stays hidden with no Box |
 

@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.14.3
+- **Print start with a Box purges 2 times instead of 5.** QIDI's `EXTRUSION_AND_FLUSH` purges about 50 mm, then runs 4 more rounds of 60 mm, each with a 6 s fan pause and a wipe: about 290 mm before `CLEAR_NOZZLE` purges another 85 mm. It now keeps the first purge and one round (about 110 mm), roughly a minute faster per print. `CLEAR_NOZZLE` is unchanged. Starting with a light filament after a dark one can leave a faint tint in the first lines; color changes during a print use the slicer's flushing volumes and aren't affected. Not on 1.6.0, which has no `EXTRUSION_AND_FLUSH`. `install` adds it; `uninstall` puts QIDI's 4 rounds back.
+
 ## 0.14.2
 - **Overdrive speaks** (Fluidd build 14): its recorded line plays when a print finishes ("Print complete. Faster than you could have done it..."), Klipper shuts down or a print errors, filament runs out (a pause with no filament at the toolhead), Box drying ends, a Box holding PLA or TPU has cooled, or Plus4 Grease refuses a print or a load while a Box cools. Nothing plays when the page opens. Settings > Theme > Persona voice turns it off. A browser plays sound only while the page is open and after it's been clicked or tapped once.
 - The six clips (about 240 KB) are in `fluidd/sounds/overdrive/`, and `tools/build_fluidd.sh` copies them into the page.
