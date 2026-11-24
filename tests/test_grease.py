@@ -453,12 +453,11 @@ class OptInTests(unittest.TestCase):
 
     def test_box_dry_adds_the_lock_print_start_wait_and_settings(self):
         core.install(self.printer.paths, FakeKlipper(), self.printer.report, options=["box-dry"])
-        include = "[include box1.cfg]\n# Plus4 Grease (--box-dry): Box cool-down lock. A pattern: nothing if the "
+        include = "[include box1.cfg]\n\n[include plus4-grease-box-loc?.cfg]\n"
         for name in self.lock_parts():
             self.assertEqual(self.printer.text(name).count(include), 1, name)
-            self.assertEqual(self.printer.text(name).replace(
-                "# Plus4 Grease (--box-dry): Box cool-down lock. A pattern: nothing if the file is gone.\n"
-                "[include plus4-grease-box-loc[k].cfg]\n", ""), stock_text(name), name)
+            self.assertEqual(self.printer.text(name).replace("\n[include plus4-grease-box-loc?.cfg]\n", ""),
+                             stock_text(name), name)
         for n in range(1, 5):
             self.assertEqual(os.stat(self.printer.paths.file("~/cfg_with_{}".format(n))).st_mode & 0o777, 0o744)
         written = [c[-1] for c in self.printer.sudo.calls if c[0] == "install" and "cfg_with" in c[-1]]
@@ -537,7 +536,7 @@ class OptInTests(unittest.TestCase):
         self.assertTrue(self.printer.has("plus4-grease-box-lock.cfg"))
         self.assertTrue(self.printer.has("plus4-grease-box-dry-settings.cfg"))
         self.assertIn("_GREASE_BOX_PRINT_CHECK", self.printer.text("gcode_macro.cfg"))
-        self.assertIn("plus4-grease-box-loc[k].cfg", self.printer.text("~/cfg_with_2"))
+        self.assertIn("[include plus4-grease-box-loc?.cfg]", self.printer.text("~/cfg_with_2"))
 
     def test_0_12s_file_is_one_box_dry_updates(self):
         self.assertIn(("plus4-grease-box-dry.cfg", "4062df48c530b28ed10d0eb1f9e536f8a19bc5cf06773b1febcfc8530a62dfe0"),

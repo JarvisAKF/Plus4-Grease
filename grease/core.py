@@ -152,11 +152,22 @@ def occurrences(text, block):
         start = index + 1
 
 
+def spans(text, blocks):
+    return [(start, start + len(block)) for block in blocks for start in occurrences(text, block)]
+
+
 def bare(text, edit):
-    """Where the edit's stock block appears outside its replacement. An edit that inserts lines after a
-    line has that line inside its replacement too, and that one doesn't count."""
-    ours = [(start, start + len(edit.replace)) for start in occurrences(text, edit.replace)]
+    """Where the edit's stock block appears outside its replacement (current or older). An edit that inserts
+    lines after a line has that line inside its replacement too, and that one doesn't count."""
+    ours = spans(text, (edit.replace,) + tuple(edit.older or ()))
     return [i for i in occurrences(text, edit.find) if not any(a <= i < b for a, b in ours)]
+
+
+def older_found(text, edit):
+    """(block, index) for each of the edit's older replacements found outside the current one."""
+    current = spans(text, (edit.replace,))
+    return [(block, i) for block in edit.older or () for i in occurrences(text, block)
+            if not any(a <= i < b for a, b in current)]
 
 
 def swap(text, old, new, index=None):
@@ -187,10 +198,13 @@ def feature_status(text_by_file, feature):
         if text is None:
             return "skipped"
         stock, ours = len(bare(text, edit)), len(occurrences(text, edit.replace))
-        if ours == 1 and stock == 0:
+        old = len(older_found(text, edit))
+        if ours == 1 and stock == 0 and old == 0:
             states.append("applied")
-        elif stock == 1 and ours == 0:
+        elif stock == 1 and ours == 0 and old == 0:
             states.append("available")
+        elif old == 1 and ours == 0 and stock == 0:
+            states.append("update")
         else:
             return "skipped"
     if all(s == "applied" for s in states):
@@ -206,8 +220,12 @@ def apply_feature(text_by_file, feature):
     """Makes each edit still to be made (an update has its edits already) and writes the feature's files."""
     for edit in feature.edits:
         found = bare(text_by_file[edit.file], edit)
+        older = older_found(text_by_file[edit.file], edit)
         if len(found) == 1:
             text_by_file[edit.file] = swap(text_by_file[edit.file], edit.find, edit.replace, found[0])
+        elif len(older) == 1:
+            block, index = older[0]
+            text_by_file[edit.file] = swap(text_by_file[edit.file], block, edit.replace, index)
     for name, content in feature.files or ():
         text_by_file[name] = content
 
@@ -215,7 +233,13 @@ def apply_feature(text_by_file, feature):
 def revert_feature(text_by_file, feature):
     """None for a file the feature created: it's to be removed."""
     for edit in feature.edits:
-        text_by_file[edit.file] = swap(text_by_file[edit.file], edit.replace, edit.find)
+        text = text_by_file[edit.file]
+        older = older_found(text, edit)
+        if occurrences(text, edit.replace):
+            text_by_file[edit.file] = swap(text, edit.replace, edit.find)
+        elif len(older) == 1:
+            block, index = older[0]
+            text_by_file[edit.file] = swap(text, block, edit.find, index)
     for name, _ in feature.files or ():
         text_by_file[name] = None
 

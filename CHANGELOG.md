@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.2
+- **Fixed: the Box cool-down lock wasn't loaded.** QIDI's Box software rewrites `box.cfg` from its templates through Python's `configparser`, and on the printer's Python 3.7 that cut 0.13.0's include `[include plus4-grease-box-loc[k].cfg]` to `[include plus4-grease-box-loc[k]`, which matches no file. Klipper started normally, but without the lock, and the next `install` called it `skipped`. Found on the owner's V2.1.1 printer right after installing 0.13.1. The include is now `[include plus4-grease-box-loc?.cfg]` after a blank line, with no comment: exactly what that rewrite writes back. The print-start check and drying weren't affected.
+- An install with 0.13.0 or 0.13.1's lock shows it as `update`, and `install` (with or without `--box-dry`) replaces it in `box.cfg` and the templates; `uninstall` removes either form.
+- Edits can now name the text earlier versions wrote (`older` in `grease/edits.py`), so install updates it and uninstall removes it.
+- `tests/test_box_rewrite.py` replays QIDI's rewrite for one to four Boxes and checks Klipper then includes the lock.
+
 ## 0.13.1
 - **Firmware 1.6.0 is accepted, with its own change list** in a separate file, `grease/edits_v160.py`. 1.6.0 came before the QIDI Box, and its print start, pause and resume differ from 1.8.1 and later, so its edits are written and tested against QIDI's published 1.6.0 files alone (`stock/plus4-1.6.0/`, from `QIDITECH/QIDI_PLUS4` `f2b5caf`) and nothing made for later firmware reaches it. It has the bed mesh save wait, both probe speeds, `--board-fan` and `--balanced-chamber`; the Box runout-flag wait and `--box-dry` aren't offered. The installer says so on 1.6.0, and it hasn't run on a 1.6.0 printer yet: [docs/testing-1.6.0.md](docs/testing-1.6.0.md) is the plan.
 - Install records the firmware it read, and `status` (which doesn't ask for `sudo`) and `uninstall` use the change list it recorded.

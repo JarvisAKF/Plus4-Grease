@@ -13,7 +13,10 @@ under 2 s more.
 import collections
 import os
 
-Edit = collections.namedtuple("Edit", "file find replace")
+# older: replacement texts an earlier Plus4 Grease version wrote, or what QIDI's rewrite of a file left of
+# them. Install turns one into the current replacement (the feature shows as 'update'), and uninstall puts
+# QIDI's text back from it.
+Edit = collections.namedtuple("Edit", "file find replace older", defaults=((),))
 # setting: the one option a feature sets, for printers where someone set it by hand (install
 # --replace-own-speeds). None for features that only make their exact text edits.
 # files: ((name, text), ...) a feature creates in the config folder and uninstall removes.
@@ -54,6 +57,19 @@ BOX_SETTINGS_CFG = _ours(BOX_SETTINGS_FILE)
 PLA_OFF = "variable_pla_drying: False\n"
 PLA_ON = "variable_pla_drying: True\n"
 BOX_TEMPLATES = ("~/cfg_with_1", "~/cfg_with_2", "~/cfg_with_3", "~/cfg_with_4")
+# The lock's include line in box.cfg and the templates. QIDI's box_detect rewrites box.cfg through Python's
+# configparser (seen right after a Klipper restart): comments go, each section is followed by a blank line,
+# and on the printer's Python 3.7 a section name ends at its first ']'. So the include is a plain section
+# with a '?' pattern (nothing is included if the file is gone) and no comment, and the inserted text is what
+# that rewrite writes back.
+BOX_LOCK_INCLUDE = "[include plus4-grease-box-loc?.cfg]\n"
+# 0.13.0 and 0.13.1 used a '[k]' pattern and a comment, which that rewrite cut to a line matching no file.
+BOX_LOCK_OLDER = (
+    "[include box1.cfg]\n"
+    "# Plus4 Grease (--box-dry): Box cool-down lock. A pattern: nothing if the file is gone.\n"
+    "[include plus4-grease-box-loc[k].cfg]\n",
+    "[include box1.cfg]\n\n[include plus4-grease-box-loc[k]\n",
+)
 
 
 def _settle_box_settings(text, options):
@@ -439,18 +455,16 @@ FEATURES = (
             "cooling after heating is refused, never waited for. It's included from box.cfg and from "
             "QIDI's Box templates (/home/mks/cfg_with_1 to cfg_with_4, which QIDI copies to box.cfg when the "
             "number of Boxes changes); the templates are root's, so this asks sudo. A printer with no Box "
-            "connected skips it."
+            "connected skips it. QIDI rewrites box.cfg from the templates through Python's configparser, so the "
+            "include is written in the form that survives that."
         ).format(BOX_LOCK_FILE),
         source="Plus4 Grease's own, from JarvisAKF's account of PLA jamming in the Box's warm feed tubes.",
         edits=tuple(
             Edit(
                 file=name,
                 find="[include box1.cfg]\n",
-                replace=(
-                    "[include box1.cfg]\n"
-                    "# Plus4 Grease (--box-dry): Box cool-down lock. A pattern: nothing if the file is gone.\n"
-                    "[include plus4-grease-box-loc[k].cfg]\n"
-                ),
+                replace="[include box1.cfg]\n\n" + BOX_LOCK_INCLUDE,
+                older=BOX_LOCK_OLDER,
             )
             for name in ("box.cfg",) + BOX_TEMPLATES
         ),
