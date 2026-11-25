@@ -235,7 +235,7 @@ Candidates, each needing a test on a Plus 4 before it ships:
 
 ## For developers
 
-Tests run on a computer: `python3 -m unittest discover -s tests -v`. Everything under `grease/` and `tools/` runs on the printer's Python 3.7, so it has to stay within Python 3.7.
+Tests run on a computer: `python3 -m unittest discover -s tests -v`. Everything under `grease/` and `tools/` runs on the printer's Python 3.7, so it has to stay within Python 3.7. `python3 tools/py37check.py grease/*.py tools/*.py` checks for the usual slips. `CLAUDE.md` has the project's working rules and commands.
 
 ## Credits and license
 
