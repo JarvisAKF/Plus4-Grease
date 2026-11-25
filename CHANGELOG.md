@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.15.0
+- **Filament width card** (Fluidd build 15): shows what the toolhead's filament width sensor reads, live, against 1.75 mm, with a five-minute graph, the print's min, average and max (with the layers), and a warning: amber when it stays more than the tolerance off for 10 s, red at three times that. **Correct** takes a caliper measurement and keeps a correction per filament type, since the sensor's arm squeezes soft filament like TPU thin; it changes only the card, not Klipper's reading or the flow. The readings are kept by the browser while a Fluidd tab is open. Install with `install.sh fluidd install` and `plus4-grease-fluidd-v1.38.1-15.zip`.
+- **Known problem with `--box-dry`:** on the owner's printer, the Box stopped loading at print start ("Filament NOT present", then QDE_004_005 on resume) after QIDI's own touchscreen program came back in place of qbdisplay. With Plus4 Grease removed, and then reinstalled without `--box-dry`, the same file loaded and printed. A tester saw the touchscreen stop registering newly loaded filament with Plus4 Grease installed. The cause isn't known yet; `--box-dry` puts its lock in front of QIDI's `E_LOAD`, `E_BOX` and `EXTRUDER_LOAD`, so it's the first suspect. Until it's found, don't install `--box-dry` alongside QIDI's touchscreen program.
+
 ## 0.14.3
 - **Print start with a Box purges 2 times instead of 5.** QIDI's `EXTRUSION_AND_FLUSH` purges about 50 mm, then runs 4 more rounds of 60 mm, each with a 6 s fan pause and a wipe: about 290 mm before `CLEAR_NOZZLE` purges another 85 mm. It now keeps the first purge and one round (about 110 mm), roughly a minute faster per print. `CLEAR_NOZZLE` is unchanged. Starting with a light filament after a dark one can leave a faint tint in the first lines; color changes during a print use the slicer's flushing volumes and aren't affected. Not on 1.6.0, which has no `EXTRUSION_AND_FLUSH`. `install` adds it; `uninstall` puts QIDI's 4 rounds back.
 

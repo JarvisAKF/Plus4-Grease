@@ -11,7 +11,7 @@ index 9078854..717ac6d 100644
      "@fontsource/roboto": "^5.3.0",
      "@irojs/iro-core": "^1.2.1",
 diff --git a/src/App.vue b/src/App.vue
-index 202a088..dc632c0 100644
+index 202a088..aedda56 100644
 --- a/src/App.vue
 +++ b/src/App.vue
 @@ -1,7 +1,7 @@
@@ -23,33 +23,36 @@ index 202a088..dc632c0 100644
    >
      <app-tools-drawer v-model="toolsdrawer" />
      <app-nav-drawer v-model="navdrawer" />
-@@ -12,6 +12,8 @@
+@@ -12,6 +12,9 @@
        class="background-logo"
      />
  
 +    <app-persona-voice v-if="socketReady" />
++    <app-filament-width-tracker v-if="socketReady" />
 +
      <app-bar
        @toolsdrawer="handleToolsDrawerChange"
        @navdrawer="handleNavDrawerChange"
-@@ -124,6 +126,8 @@ import MmuEditTtgMapDialog from './components/widgets/mmu/MmuEditTtgMapDialog.vu
+@@ -124,6 +127,9 @@ import MmuEditTtgMapDialog from './components/widgets/mmu/MmuEditTtgMapDialog.vu
  import AfcPrintStartDialog from './components/widgets/afc/dialogs/AfcPrintStartDialog.vue'
  import type { UpdateResponse } from '@/store/version/types'
  import type { ConsoleLogEntry } from '@/store/console/types'
 +import { persona } from '@/util/persona'
 +import AppPersonaVoice from '@/components/layout/AppPersonaVoice.vue'
++import AppFilamentWidthTracker from '@/components/layout/AppFilamentWidthTracker.vue'
  
  @Component<App>({
    metaInfo () {
-@@ -134,6 +138,7 @@ import type { ConsoleLogEntry } from '@/store/console/types'
+@@ -134,6 +140,8 @@ import type { ConsoleLogEntry } from '@/store/console/types'
      }
    },
    components: {
 +    AppPersonaVoice,
++    AppFilamentWidthTracker,
      SpoolSelectionDialog,
      FileSystemDownloadDialog,
      FileSystemUploadDialog,
-@@ -160,7 +165,14 @@ export default class App extends Mixins(StateMixin, FilesMixin, BrowserMixin) {
+@@ -160,7 +168,14 @@ export default class App extends Mixins(StateMixin, FilesMixin, BrowserMixin) {
    }
  
    get showBackgroundLogo () {
@@ -179,6 +182,59 @@ index 4e396b1..6284b40 100644
    .toolbar-supplemental {
      display: flex;
      justify-content: flex-end;
+diff --git a/src/components/layout/AppFilamentWidthTracker.vue b/src/components/layout/AppFilamentWidthTracker.vue
+new file mode 100644
+index 0000000..1871703
+--- /dev/null
++++ b/src/components/layout/AppFilamentWidthTracker.vue
+@@ -0,0 +1,47 @@
++<template>
++  <span v-if="false" />
++</template>
++
++<script lang="ts">
++import { Component, Mixins } from 'vue-property-decorator'
++import FilamentWidthMixin from '@/mixins/filamentWidth'
++import { addFilamentWidthSample, filamentPresent } from '@/util/filament-width'
++import { filamentWidthTracker } from '@/util/filament-width-tracker'
++
++// Plus4 Grease: reads the filament width sensor once a second for the filament width card, whichever page is open.
++@Component({})
++export default class AppFilamentWidthTracker extends Mixins(FilamentWidthMixin) {
++  timer: number | null = null
++
++  mounted () {
++    this.timer = window.setInterval(this.sample, 1000)
++  }
++
++  beforeDestroy () {
++    if (this.timer != null) window.clearInterval(this.timer)
++  }
++
++  sample () {
++    if (!this.hasFilamentWidthSensor) return
++
++    const now = Date.now() / 1000
++    const reading = this.filamentWidthReading
++
++    filamentWidthTracker.now = now
++    filamentWidthTracker.raw = filamentPresent(reading, this.filamentWidthMinDiameter)
++      ? [...filamentWidthTracker.raw.slice(-4), reading]
++      : []
++    filamentWidthTracker.state = addFilamentWidthSample(filamentWidthTracker.state, {
++      time: now,
++      diameter: reading,
++      minDiameter: this.filamentWidthMinDiameter,
++      correction: this.filamentWidthCorrection,
++      nominal: this.filamentWidthNominal,
++      tolerance: this.filamentWidthSettings.tolerance,
++      printing: this.filamentWidthPrinting,
++      filename: this.filamentWidthFilename,
++      layer: this.filamentWidthLayer
++    })
++  }
++}
++</script>
 diff --git a/src/components/layout/AppNavDrawer.vue b/src/components/layout/AppNavDrawer.vue
 index 669378b..edf8a0c 100644
 --- a/src/components/layout/AppNavDrawer.vue
@@ -641,6 +697,453 @@ index 85b1485..e1f1681 100644
    get themePresets (): ThemePreset[] {
      return this.$typedState.config.hostConfig.themePresets
    }
+diff --git a/src/components/widgets/filamentWidth/FilamentWidthCard.vue b/src/components/widgets/filamentWidth/FilamentWidthCard.vue
+new file mode 100644
+index 0000000..0d046d3
+--- /dev/null
++++ b/src/components/widgets/filamentWidth/FilamentWidthCard.vue
+@@ -0,0 +1,441 @@
++<template>
++  <collapsable-card
++    :title="$t('app.filament_width.title')"
++    icon="$filamentWidth"
++    draggable
++    layout-path="dashboard.filament-width-card"
++  >
++    <template #menu>
++      <app-btn
++        small
++        class="me-1 my-1"
++        @click="openCalibrate"
++      >
++        <v-icon
++          small
++          class="me-1"
++        >
++          $cog
++        </v-icon>
++        {{ $t('app.filament_width.btn.calibrate') }}
++      </app-btn>
++    </template>
++
++    <div
++      class="pa-3 filament-width-card"
++      :class="`filament-width-card--${level}`"
++    >
++      <div class="d-flex align-end flex-wrap">
++        <div class="filament-width-card__value">
++          <template v-if="value != null">
++            {{ value.toFixed(2) }}<span class="filament-width-card__unit">mm</span>
++          </template>
++          <template v-else>
++            —
++          </template>
++        </div>
++        <div class="ms-3 mb-1">
++          <div
++            v-if="value != null"
++            class="filament-width-card__deviation"
++          >
++            {{ deviationText }}
++          </div>
++          <div class="text-caption text--secondary">
++            {{ $t('app.filament_width.label.nominal', { nominal: nominal.toFixed(2) }) }}
++          </div>
++        </div>
++        <v-spacer />
++        <v-chip
++          small
++          label
++          class="mb-1 filament-width-card__chip"
++        >
++          {{ levelText }}
++        </v-chip>
++      </div>
++
++      <div class="text-caption text--secondary mt-1">
++        {{ materialText }}
++      </div>
++
++      <svg
++        class="filament-width-card__graph mt-3"
++        :viewBox="`0 0 ${graph.width} ${graph.height}`"
++        preserveAspectRatio="none"
++        role="img"
++        :aria-label="$t('app.filament_width.label.graph').toString()"
++      >
++        <rect
++          class="filament-width-card__band"
++          x="0"
++          :y="bandTop"
++          :width="graph.width"
++          :height="bandHeight"
++        />
++        <line
++          class="filament-width-card__nominal"
++          x1="0"
++          :x2="graph.width"
++          :y1="nominalY"
++          :y2="nominalY"
++        />
++        <polyline
++          v-if="points"
++          class="filament-width-card__line"
++          :points="points"
++          vector-effect="non-scaling-stroke"
++        />
++      </svg>
++      <div class="d-flex text-caption text--secondary filament-width-card__axis">
++        <span>{{ $t('app.filament_width.label.minutes_ago', { minutes: 5 }) }}</span>
++        <v-spacer />
++        <span>{{ graph.low.toFixed(2) }}–{{ graph.high.toFixed(2) }} mm</span>
++        <v-spacer />
++        <span>{{ $t('app.filament_width.label.now') }}</span>
++      </div>
++
++      <div
++        v-if="printStats"
++        class="mt-3 filament-width-card__stats"
++      >
++        <div class="text-overline text--secondary">
++          {{ printing ? $t('app.filament_width.label.this_print') : $t('app.filament_width.label.last_print') }}
++        </div>
++        <div class="d-flex flex-wrap">
++          <div class="me-4">
++            {{ $t('app.filament_width.label.min') }} <strong>{{ printStats.min }}</strong>
++            <span
++              v-if="printStats.minLayer != null"
++              class="text--secondary"
++            >{{ $t('app.filament_width.label.at_layer', { layer: printStats.minLayer }) }}</span>
++          </div>
++          <div class="me-4">
++            {{ $t('app.filament_width.label.average') }} <strong>{{ printStats.average }}</strong>
++          </div>
++          <div>
++            {{ $t('app.filament_width.label.max') }} <strong>{{ printStats.max }}</strong>
++            <span
++              v-if="printStats.maxLayer != null"
++              class="text--secondary"
++            >{{ $t('app.filament_width.label.at_layer', { layer: printStats.maxLayer }) }}</span>
++          </div>
++        </div>
++        <div class="text-caption text--secondary">
++          {{ $t('app.filament_width.label.page_open', { time: printStats.since }) }}
++        </div>
++      </div>
++    </div>
++
++    <app-dialog
++      v-model="calibrateOpen"
++      :title="$t('app.filament_width.title_calibrate', { material })"
++      width="520"
++      :save-button-disabled="!calibrateValid"
++      :save-button-text="$t('app.filament_width.btn.apply')"
++      @save="applyCalibration"
++    >
++      <v-card-text>
++        <p>{{ $t('app.filament_width.help.calibrate') }}</p>
++        <p class="text--secondary">
++          {{ sensorNowText }}
++        </p>
++        <v-text-field
++          v-model="calipers"
++          :label="$t('app.filament_width.label.calipers')"
++          type="number"
++          step="0.01"
++          suffix="mm"
++          outlined
++          dense
++          :rules="[calipersRule]"
++        />
++        <v-select
++          v-model="tolerance"
++          :items="toleranceItems"
++          :label="$t('app.filament_width.label.tolerance')"
++          outlined
++          dense
++          hide-details
++        />
++        <app-btn
++          v-if="correction !== 0"
++          small
++          text
++          class="mt-3 px-0"
++          @click="clearCorrection"
++        >
++          {{ $t('app.filament_width.btn.clear', { material }) }}
++        </app-btn>
++      </v-card-text>
++    </app-dialog>
++  </collapsable-card>
++</template>
++
++<script lang="ts">
++// Plus4 Grease: what the toolhead's filament width sensor reads, live: the value against the nominal diameter, a
++// five-minute graph, and the print's min, average and max. See src/util/filament-width.ts.
++import { Component, Mixins } from 'vue-property-decorator'
++import FilamentWidthMixin from '@/mixins/filamentWidth'
++import {
++  correctedDiameter,
++  correctionFromCalipers,
++  filamentWidthAverage,
++  filamentWidthLevel,
++  filamentWidthPolyline,
++  type FilamentWidthLevel
++} from '@/util/filament-width'
++import { filamentWidthTracker } from '@/util/filament-width-tracker'
++
++@Component({})
++export default class FilamentWidthCard extends Mixins(FilamentWidthMixin) {
++  calibrateOpen = false
++  calipers = ''
++  tolerance = 0.1
++
++  readonly toleranceItems = [0.05, 0.1, 0.15, 0.2].map(value => ({ text: `± ${value.toFixed(2)} mm`, value }))
++
++  get material (): string {
++    return this.filamentWidthMaterial
++  }
++
++  get correction (): number {
++    return this.filamentWidthCorrection
++  }
++
++  get nominal (): number {
++    return this.filamentWidthNominal
++  }
++
++  get printing (): boolean {
++    return this.filamentWidthPrinting
++  }
++
++  get value (): number | null {
++    return correctedDiameter(this.filamentWidthReading, this.filamentWidthMinDiameter, this.correction)
++  }
++
++  get level (): FilamentWidthLevel {
++    return filamentWidthLevel(
++      filamentWidthTracker.state,
++      this.value,
++      this.nominal,
++      this.filamentWidthSettings.tolerance,
++      filamentWidthTracker.now
++    )
++  }
++
++  get levelText (): string {
++    if (this.level === 'none') return this.$t('app.filament_width.level.none').toString()
++    if (this.level === 'ok') return this.$t('app.filament_width.level.ok').toString()
++
++    const thin = (this.value ?? 0) < this.nominal
++
++    return this.$t(`app.filament_width.level.${this.level}_${thin ? 'thin' : 'thick'}`).toString()
++  }
++
++  get deviationText (): string {
++    const deviation = (this.value ?? 0) - this.nominal
++
++    const size = Math.abs(deviation).toFixed(2)
++
++    return size === '0.00' ? '±0.00 mm' : `${deviation > 0 ? '+' : '−'}${size} mm`
++  }
++
++  get materialText (): string {
++    const slot = this.filamentWidthBoxSlot
++    const source = slot ? this.$t('app.filament_width.label.from_slot', { slot: slot.label }).toString() : ''
++    const correction = this.correction !== 0
++      ? this.$t('app.filament_width.label.corrected', {
++        correction: `${this.correction > 0 ? '+' : '−'}${Math.abs(this.correction).toFixed(2)}`
++      }).toString()
++      : this.$t('app.filament_width.label.uncorrected').toString()
++
++    return [`${this.material}${source ? ` ${source}` : ''}`, correction].join(' · ')
++  }
++
++  get graph () {
++    return { width: 300, height: 70, low: this.nominal - 0.5, high: this.nominal + 0.5 }
++  }
++
++  y (value: number): number {
++    const { height, low, high } = this.graph
++    const clamped = Math.min(high, Math.max(low, value))
++
++    return height - (clamped - low) / (high - low) * height
++  }
++
++  get nominalY (): number {
++    return this.y(this.nominal)
++  }
++
++  get bandTop (): number {
++    return this.y(this.nominal + this.filamentWidthSettings.tolerance)
++  }
++
++  get bandHeight (): number {
++    return this.y(this.nominal - this.filamentWidthSettings.tolerance) - this.bandTop
++  }
++
++  get points (): string {
++    const { width, height, low, high } = this.graph
++
++    return filamentWidthPolyline(
++      filamentWidthTracker.state.history, filamentWidthTracker.now, width, height, low, high, this.correction
++    )
++  }
++
++  get printStats () {
++    const print = filamentWidthTracker.state.print
++    const average = filamentWidthAverage(print, this.correction)
++
++    if (!print || average == null) return null
++
++    return {
++      min: (print.min + this.correction).toFixed(2),
++      minLayer: print.minLayer,
++      average: average.toFixed(2),
++      max: (print.max + this.correction).toFixed(2),
++      maxLayer: print.maxLayer,
++      since: this.$filters.formatTimeWithSeconds(print.started * 1000)
++    }
++  }
++
++  get sensorNowText (): string {
++    const raw = filamentWidthTracker.raw
++
++    if (raw.length === 0) return this.$t('app.filament_width.help.no_filament').toString()
++
++    const average = raw.reduce((sum, value) => sum + value, 0) / raw.length
++
++    return this.$t('app.filament_width.help.sensor_now', { reading: average.toFixed(2) }).toString()
++  }
++
++  calipersRule (value: string): boolean | string {
++    if (value === '' || value == null) return true
++
++    return this.calibratedCorrection != null || this.$t('app.filament_width.help.bad_calipers').toString()
++  }
++
++  get calibratedCorrection (): number | null {
++    if (this.calipers === '') return null
++
++    return correctionFromCalipers(Number(this.calipers), filamentWidthTracker.raw)
++  }
++
++  get calibrateValid (): boolean {
++    return this.calipers === '' || this.calibratedCorrection != null
++  }
++
++  openCalibrate () {
++    this.calipers = ''
++    this.tolerance = this.filamentWidthSettings.tolerance
++    this.calibrateOpen = true
++  }
++
++  async applyCalibration () {
++    const settings = this.filamentWidthSettings
++    const corrections = { ...settings.corrections }
++
++    if (this.calibratedCorrection != null) {
++      corrections[this.material] = this.calibratedCorrection
++    }
++
++    await this.saveFilamentWidthSettings({ corrections, tolerance: this.tolerance })
++    this.calibrateOpen = false
++  }
++
++  async clearCorrection () {
++    const settings = this.filamentWidthSettings
++    const corrections = { ...settings.corrections }
++
++    delete corrections[this.material]
++
++    await this.saveFilamentWidthSettings({ corrections, tolerance: settings.tolerance })
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.filament-width-card__value {
++  font-size: 2.6rem;
++  font-weight: 500;
++  line-height: 1;
++  font-variant-numeric: tabular-nums;
++}
++
++.filament-width-card__unit {
++  font-size: 1rem;
++  margin-left: 4px;
++  opacity: 0.7;
++}
++
++.filament-width-card__deviation {
++  font-variant-numeric: tabular-nums;
++}
++
++.filament-width-card__graph {
++  display: block;
++  width: 100%;
++  height: 70px;
++}
++
++.filament-width-card__band {
++  fill: currentColor;
++  opacity: 0.08;
++}
++
++.filament-width-card__nominal {
++  stroke: currentColor;
++  stroke-opacity: 0.35;
++  stroke-dasharray: 4 4;
++  vector-effect: non-scaling-stroke;
++}
++
++.filament-width-card__line {
++  fill: none;
++  stroke: var(--v-primary-base);
++  stroke-width: 2;
++}
++
++.filament-width-card__axis {
++  font-variant-numeric: tabular-nums;
++}
++
++.filament-width-card--ok .filament-width-card__chip {
++  background-color: var(--v-success-base) !important;
++  color: #fff;
++}
++
++.filament-width-card--warn {
++  .filament-width-card__chip {
++    background-color: var(--v-warning-base) !important;
++    color: #000;
++  }
++
++  .filament-width-card__deviation,
++  .filament-width-card__value {
++    color: var(--v-warning-base);
++  }
++
++  .filament-width-card__line {
++    stroke: var(--v-warning-base);
++  }
++}
++
++.filament-width-card--bad {
++  .filament-width-card__chip {
++    background-color: var(--v-error-base) !important;
++    color: #fff;
++  }
++
++  .filament-width-card__deviation,
++  .filament-width-card__value {
++    color: var(--v-error-base);
++  }
++
++  .filament-width-card__line {
++    stroke: var(--v-error-base);
++  }
++}
++</style>
 diff --git a/src/components/widgets/qidiBox/QidiBoxCard.vue b/src/components/widgets/qidiBox/QidiBoxCard.vue
 new file mode 100644
 index 0000000..2fc1887
@@ -3727,7 +4230,7 @@ index 0b00d7e..d537b6a 100644
      open: false,
      x: 0,
 diff --git a/src/globals.ts b/src/globals.ts
-index ed39791..d4b391b 100644
+index ed39791..c6756db 100644
 --- a/src/globals.ts
 +++ b/src/globals.ts
 @@ -1,4 +1,5 @@
@@ -3736,7 +4239,15 @@ index ed39791..d4b391b 100644
    mdiClose,
    mdiTune,
    mdiMinus,
-@@ -347,6 +348,9 @@ export const Globals = Object.freeze({
+@@ -9,6 +10,7 @@ import {
+   mdiPrinter3d,
+   mdiPrinter3dNozzle,
+   mdiPrinter3dNozzleOutline,
++  mdiDiameterVariant,
+   mdiFileCodeOutline,
+   mdiFileRefreshOutline,
+   mdiConsole,
+@@ -347,6 +349,9 @@ export const Globals = Object.freeze({
    GITHUB_REPO: 'https://github.com/fluidd-core/fluidd'
  })
  
@@ -3746,7 +4257,7 @@ index ed39791..d4b391b 100644
  export const Icons = Object.freeze({
    dash: mdiViewDashboardOutline,
    account: mdiAccount,
-@@ -589,6 +593,10 @@ export const Icons = Object.freeze({
+@@ -589,6 +594,11 @@ export const Icons = Object.freeze({
    afcEjectFilament: mdiEject,
    afcSelectTool: mdiRadioboxBlank,
    afcUnselectTool: mdiSwapHorizontalVariant,
@@ -3754,10 +4265,11 @@ index ed39791..d4b391b 100644
 +  qidiBoxHumidity: mdiWater,
 +  qidiBoxEject: mdiEject,
 +  qidiBoxRfid: mdiNfcVariant,
++  filamentWidth: mdiDiameterVariant,
  })
  
  export const Waits = Object.freeze({
-@@ -687,7 +695,8 @@ export const Waits = Object.freeze({
+@@ -687,7 +697,8 @@ export const Waits = Object.freeze({
    onMmuRelease: 'onMmuRelease',
    onMmuServo: 'onMmuServo',
    onMmuLed: 'onMmuLed',
@@ -3768,7 +4280,7 @@ index ed39791..d4b391b 100644
  
  export const SupportedLocales = Object.freeze([
 diff --git a/src/locales/en.yaml b/src/locales/en.yaml
-index 217e550..ebf0f97 100644
+index 217e550..2d3176b 100644
 --- a/src/locales/en.yaml
 +++ b/src/locales/en.yaml
 @@ -896,6 +896,9 @@ app:
@@ -3795,7 +4307,7 @@ index 217e550..ebf0f97 100644
        theme_disclaimer: >-
          These themes feature brand names and logos that are the intellectual property
          of their respective owners.<br>
-@@ -1456,6 +1466,252 @@ app:
+@@ -1456,6 +1466,291 @@ app:
        show_logos: Show Logos
        show_climate: Show Climate Info
        show_unavailable_spool_color: Show Unavailable Spools
@@ -4045,9 +4557,144 @@ index 217e550..ebf0f97 100644
 +      write_tag: Write %{slot}'s spool tag
 +      qidi_box: QIDI Box
 +      tool_mapping: Tool mapping
++  filament_width:
++    title: Filament width
++    title_calibrate: Correct the sensor for %{material}
++    btn:
++      apply: Apply
++      calibrate: Correct
++      clear: Remove the %{material} correction
++    level:
++      none: No filament
++      ok: OK
++      warn_thin: Thin
++      warn_thick: Thick
++      bad_thin: Very thin
++      bad_thick: Very thick
++    label:
++      at_layer: ' (layer %{layer})'
++      average: Avg
++      calipers: Caliper measurement
++      corrected: corrected %{correction} mm with calipers
++      from_slot: from %{slot}
++      graph: Filament width over the last 5 minutes
++      last_print: Last print
++      max: Max
++      min: Min
++      minutes_ago: '%{minutes} min ago'
++      nominal: 'nominal %{nominal} mm'
++      now: now
++      page_open: Since %{time}, while Fluidd was open in this browser
++      this_print: This print
++      tolerance: Warn when it stays further off than
++      uncorrected: sensor reading, not corrected
++    help:
++      bad_calipers: Enter what calipers read on this filament, between 1.00 and 3.00 mm, within 1 mm of the sensor.
++      calibrate: >-
++        The sensor presses on the filament with a spring-loaded arm, so soft filament like TPU reads thin. With this
++        filament loaded, measure it with calipers in a few places and enter the average. The card then shows what the
++        calipers would for this filament type. Only this card changes: Klipper's reading and the flow stay as they are.
++      no_filament: There's no filament at the sensor right now. Load some first.
++      sensor_now: 'The sensor reads %{reading} mm right now.'
    sensors:
      title:
        sensors: Sensors
+diff --git a/src/mixins/filamentWidth.ts b/src/mixins/filamentWidth.ts
+new file mode 100644
+index 0000000..ac05ece
+--- /dev/null
++++ b/src/mixins/filamentWidth.ts
+@@ -0,0 +1,90 @@
++import { Component, Mixins } from 'vue-property-decorator'
++import StateMixin from './state'
++import type { QidiBoxSlot } from '@/util/qidi-box'
++import {
++  DEFAULT_NOMINAL,
++  filamentWidthMaterial,
++  filamentWidthSettings,
++  type FilamentWidthSettings
++} from '@/util/filament-width'
++
++// Plus4 Grease: what the filament width card and its tracker both need to know.
++@Component
++export default class FilamentWidthMixin extends Mixins(StateMixin) {
++  get filamentWidthSensor (): { Diameter?: number; Raw?: number; is_active?: boolean } | undefined {
++    return this.$typedState.printer.printer.hall_filament_width_sensor
++  }
++
++  get hasFilamentWidthSensor (): boolean {
++    return this.filamentWidthSensor != null
++  }
++
++  get filamentWidthReading (): number | null {
++    const value = Number(this.filamentWidthSensor?.Diameter)
++
++    return Number.isFinite(value) ? value : null
++  }
++
++  get filamentWidthSensorSettings (): Record<string, any> {
++    return this.$typedState.printer.printer.configfile?.settings?.hall_filament_width_sensor ?? {}
++  }
++
++  get filamentWidthMinDiameter (): number {
++    const value = Number(this.filamentWidthSensorSettings.min_diameter)
++
++    return Number.isFinite(value) ? value : 0.3
++  }
++
++  get filamentWidthNominal (): number {
++    const value = Number(this.filamentWidthSensorSettings.default_nominal_filament_diameter)
++
++    return Number.isFinite(value) && value > 1 && value < 3.5 ? value : DEFAULT_NOMINAL
++  }
++
++  get filamentWidthSettings (): FilamentWidthSettings {
++    return filamentWidthSettings(this.$typedState.config.uiSettings.dashboard.filamentWidth)
++  }
++
++  // The Box slot feeding the toolhead, if a Box is.
++  get filamentWidthBoxSlot (): QidiBoxSlot | null {
++    const index: number | null = this.$typedGetters['qidiBox/getLoadedSlot'] ?? null
++
++    return index == null ? null : this.$typedGetters['qidiBox/getSlot'](index) ?? null
++  }
++
++  get filamentWidthFileType (): string | null {
++    const types: string[] | undefined = this.$typedGetters['printer/getPrinterFile']?.filament_type
++
++    return types?.[0] ?? null
++  }
++
++  get filamentWidthMaterial (): string {
++    return filamentWidthMaterial(this.filamentWidthBoxSlot?.type, this.filamentWidthFileType)
++  }
++
++  get filamentWidthCorrection (): number {
++    return this.filamentWidthSettings.corrections[this.filamentWidthMaterial] ?? 0
++  }
++
++  get filamentWidthPrinting (): boolean {
++    return ['printing', 'paused'].includes(this.$typedState.printer.printer.print_stats?.state ?? '')
++  }
++
++  get filamentWidthFilename (): string {
++    return this.$typedState.printer.printer.print_stats?.filename ?? ''
++  }
++
++  get filamentWidthLayer (): number | null {
++    const layer = Number(this.$typedState.printer.printer.print_stats?.info?.current_layer)
++
++    return Number.isFinite(layer) && layer > 0 ? layer : null
++  }
++
++  async saveFilamentWidthSettings (settings: FilamentWidthSettings) {
++    await this.$typedDispatch('config/saveByPath', {
++      path: 'uiSettings.dashboard.filamentWidth',
++      value: settings,
++      server: true
++    })
++  }
++}
 diff --git a/src/mixins/qidiBox.ts b/src/mixins/qidiBox.ts
 new file mode 100644
 index 0000000..f2f6d2f
@@ -4313,7 +4960,7 @@ index 3ff8f17..cc4fbd4 100644
      vuetifyTheme.currentTheme.primary = payload.color
      vuetifyTheme.currentTheme['primary-offset'] = new TinyColor(payload.color)
 diff --git a/src/store/config/state.ts b/src/store/config/state.ts
-index 319ad0d..9a4c4d1 100644
+index 319ad0d..0a36b7d 100644
 --- a/src/store/config/state.ts
 +++ b/src/store/config/state.ts
 @@ -77,7 +77,9 @@ export const createState = (): ConfigState => {
@@ -4327,8 +4974,21 @@ index 319ad0d..9a4c4d1 100644
        },
        warnings: {
          warnOnCpuThrottled: true,
+@@ -92,7 +94,11 @@ export const createState = (): ConfigState => {
+       },
+       dashboard: {
+         tempPresets: [],
+-        sensorColors: {}
++        sensorColors: {},
++        filamentWidth: {
++          corrections: {},
++          tolerance: 0.1
++        }
+       },
+       tableHeaders: {},
+       thumbnailSizes: {},
 diff --git a/src/store/config/types.ts b/src/store/config/types.ts
-index b867a9d..4a02a04 100644
+index b867a9d..e870716 100644
 --- a/src/store/config/types.ts
 +++ b/src/store/config/types.ts
 @@ -171,6 +171,10 @@ export interface ThemeConfig {
@@ -4342,6 +5002,18 @@ index b867a9d..4a02a04 100644
  }
  
  // Config defined in host
+@@ -210,6 +214,11 @@ export interface AxisConfig {
+ export interface DashboardConfig {
+   tempPresets: TemperaturePreset[];
+   sensorColors: Record<string, string>;
++  // Plus4 Grease: the filament width card's caliper corrections (mm, by filament type) and warning tolerance (mm).
++  filamentWidth?: {
++    corrections: Record<string, number>;
++    tolerance: number;
++  };
+ }
+ 
+ export interface SaveByPath {
 diff --git a/src/store/index.ts b/src/store/index.ts
 index a14922c..d2e329f 100644
 --- a/src/store/index.ts
@@ -4365,14 +5037,15 @@ index a14922c..d2e329f 100644
    mutations: {},
    actions: {
 diff --git a/src/store/layout/state.ts b/src/store/layout/state.ts
-index 36e57ac..9575b05 100644
+index 36e57ac..f0f4a86 100644
 --- a/src/store/layout/state.ts
 +++ b/src/store/layout/state.ts
-@@ -55,6 +55,7 @@ export const createState = (): LayoutState => {
+@@ -55,6 +55,8 @@ export const createState = (): LayoutState => {
        dashboard: {
          container1: [
            { id: 'printer-status-card', enabled: true, collapsed: false },
 +          { id: 'box-card', enabled: true, collapsed: false },
++          { id: 'filament-width-card', enabled: true, collapsed: false },
            { id: 'spoolman-card', enabled: true, collapsed: false },
            { id: 'mmu-card', enabled: true, collapsed: false },
            { id: 'camera-card', enabled: true, collapsed: false },
@@ -4756,6 +5429,170 @@ index 8b4293a..942925c 100644
  }
  
  type RootStateType<TModules> = {
+diff --git a/src/util/__tests__/filament-width.spec.ts b/src/util/__tests__/filament-width.spec.ts
+new file mode 100644
+index 0000000..dfaf65f
+--- /dev/null
++++ b/src/util/__tests__/filament-width.spec.ts
+@@ -0,0 +1,158 @@
++import {
++  addFilamentWidthSample,
++  correctedDiameter,
++  correctionFromCalipers,
++  createFilamentWidthState,
++  filamentWidthAverage,
++  filamentWidthLevel,
++  filamentWidthMaterial,
++  filamentWidthPolyline,
++  filamentWidthSettings,
++  HISTORY_SECONDS,
++  type FilamentWidthInput,
++  type FilamentWidthState
++} from '../filament-width'
++
++// Plus4 Grease: the filament width card's logic.
++const input = (overrides: Partial<FilamentWidthInput> = {}): FilamentWidthInput => ({
++  time: 1000,
++  diameter: 1.75,
++  minDiameter: 0.3,
++  correction: 0,
++  nominal: 1.75,
++  tolerance: 0.1,
++  printing: true,
++  filename: 'bracket.gcode',
++  layer: 1,
++  ...overrides
++})
++
++const feed = (samples: Array<Partial<FilamentWidthInput>>, state: FilamentWidthState = createFilamentWidthState()) =>
++  samples.reduce((current, sample) => addFilamentWidthSample(current, input(sample)), state)
++
++describe('filament width', () => {
++  it('shows nothing with no filament at the sensor', () => {
++    expect(correctedDiameter(-0.35, 0.3, 0)).toBeNull()
++    expect(correctedDiameter(0.25, 0.3, 0.2)).toBeNull()
++    expect(correctedDiameter(null, 0.3, 0)).toBeNull()
++  })
++
++  it('adds the material correction to the reading', () => {
++    expect(correctedDiameter(1.42, 0.3, 0.33)).toBe(1.75)
++    expect(correctedDiameter(1.8, 0.3, -0.05)).toBe(1.75)
++  })
++
++  it('takes the correction from a caliper measurement and the average recent reading', () => {
++    expect(correctionFromCalipers(1.75, [1.4, 1.5, 1.45])).toBe(0.3)
++    expect(correctionFromCalipers(1.74, [1.74])).toBe(0)
++  })
++
++  it('refuses caliper values and corrections that make no sense', () => {
++    expect(correctionFromCalipers(0.5, [1.4])).toBeNull()
++    expect(correctionFromCalipers(1.75, [])).toBeNull()
++    expect(correctionFromCalipers(2.9, [1.2])).toBeNull()
++  })
++
++  it('keys the correction by the Box slot\'s filament, then the print\'s, then Default', () => {
++    expect(filamentWidthMaterial('TPU', 'PLA')).toBe('TPU')
++    expect(filamentWidthMaterial(null, 'petg;PLA')).toBe('PETG')
++    expect(filamentWidthMaterial('', undefined)).toBe('Default')
++    expect(filamentWidthMaterial('none', null)).toBe('Default')
++  })
++
++  it('cleans stored settings', () => {
++    expect(filamentWidthSettings(null)).toEqual({ corrections: {}, tolerance: 0.1 })
++    expect(filamentWidthSettings({ corrections: { TPU: 0.3, PLA: 5, X: Number.NaN }, tolerance: 2 }))
++      .toEqual({ corrections: { TPU: 0.3 }, tolerance: 0.1 })
++    expect(filamentWidthSettings({ tolerance: 0.15 }).tolerance).toBe(0.15)
++  })
++
++  it('keeps the sensor\'s own readings and applies the correction when shown', () => {
++    const state = feed([{ time: 1, diameter: 1.42, correction: 0.33 }])
++
++    expect(state.history).toEqual([{ time: 1, diameter: 1.42 }])
++    expect(state.print).toMatchObject({ min: 1.42, max: 1.42 })
++    expect(filamentWidthAverage(state.print, 0.33)).toBe(1.75)
++    expect(filamentWidthPolyline(state.history, 1, 300, 60, 1.25, 2.25, 0.33)).toBe('300,30')
++  })
++
++  it('judges the level on the corrected value', () => {
++    const state = feed([{ time: 100, diameter: 1.42, correction: 0.33 }])
++
++    expect(state.outSince).toBeNull()
++  })
++
++  it('keeps one graph point per second for five minutes', () => {
++    const state = feed([{ time: 1000.1, diameter: 1.7 }, { time: 1000.6, diameter: 1.72 }, { time: 1001.2, diameter: 1.74 }])
++
++    expect(state.history).toEqual([{ time: 1000.6, diameter: 1.72 }, { time: 1001.2, diameter: 1.74 }])
++
++    const later = feed([{ time: 1000 + HISTORY_SECONDS + 5, diameter: 1.75 }], state)
++
++    expect(later.history).toEqual([{ time: 1305, diameter: 1.75 }])
++  })
++
++  it('tracks the print\'s min, average and max with their layers, ignoring no-filament readings', () => {
++    const state = feed([
++      { time: 1, diameter: 1.7, layer: 1 },
++      { time: 2, diameter: 1.2, layer: 40 },
++      { time: 3, diameter: -0.35, layer: 41 },
++      { time: 4, diameter: 1.8, layer: 60 }
++    ])
++
++    expect(state.print).toMatchObject({ filename: 'bracket.gcode', count: 3, min: 1.2, minLayer: 40, max: 1.8, maxLayer: 60 })
++    expect(filamentWidthAverage(state.print)).toBe(1.567)
++  })
++
++  it('keeps a print\'s numbers after it ends and starts over with the next print, even of the same file', () => {
++    const done = feed([{ time: 1, diameter: 1.2 }, { time: 2, diameter: 1.7, printing: false }])
++
++    expect(done.print?.min).toBe(1.2)
++
++    const next = feed([{ time: 3, diameter: 1.74 }], done)
++
++    expect(next.print).toMatchObject({ started: 3, count: 1, min: 1.74 })
++  })
++
++  it('doesn\'t start over when a paused print resumes', () => {
++    const state = feed([{ time: 1, diameter: 1.2 }, { time: 2, diameter: 1.7 }, { time: 3, diameter: 1.74 }])
++
++    expect(state.print).toMatchObject({ started: 1, count: 3 })
++  })
++
++  it('warns only once the reading has stayed out of tolerance for 10 s', () => {
++    const state = feed([{ time: 100, diameter: 1.6 }, { time: 105, diameter: 1.61 }])
++
++    expect(filamentWidthLevel(state, 1.61, 1.75, 0.1, 105)).toBe('ok')
++    expect(filamentWidthLevel(state, 1.61, 1.75, 0.1, 110)).toBe('warn')
++  })
++
++  it('is bad when it stays more than 3 tolerances out', () => {
++    const state = feed([{ time: 100, diameter: 1.2 }])
++
++    expect(filamentWidthLevel(state, 1.2, 1.75, 0.1, 111)).toBe('bad')
++  })
++
++  it('starts the warning timer over when the reading comes back in or swaps sides', () => {
++    const back = feed([{ time: 100, diameter: 1.6 }, { time: 108, diameter: 1.75 }, { time: 109, diameter: 1.6 }])
++
++    expect(filamentWidthLevel(back, 1.6, 1.75, 0.1, 115)).toBe('ok')
++
++    const swapped = feed([{ time: 100, diameter: 1.6 }, { time: 108, diameter: 1.9 }])
++
++    expect(swapped.outSince).toBe(108)
++  })
++
++  it('has no level without filament', () => {
++    expect(filamentWidthLevel(createFilamentWidthState(), null, 1.75, 0.1, 0)).toBe('none')
++  })
++
++  it('draws the graph inside its box, clamping readings beyond the range', () => {
++    const points = filamentWidthPolyline(
++      [{ time: 701, diameter: 1.75 }, { time: 1000, diameter: 3 }],
++      1000, 300, 60, 1.25, 2.25
++    )
++
++    expect(points).toBe('1,30 300,0')
++  })
++})
 diff --git a/src/util/__tests__/persona.spec.ts b/src/util/__tests__/persona.spec.ts
 new file mode 100644
 index 0000000..894dd0f
@@ -5778,6 +6615,245 @@ index 0000000..4b4c533
 +    expect(qidiBoxToolButtons({ 0: 0, 1: 1 }, slots, null, 1).some(button => button.active)).toBe(false)
 +  })
 +})
+diff --git a/src/util/filament-width-tracker.ts b/src/util/filament-width-tracker.ts
+new file mode 100644
+index 0000000..579c0ca
+--- /dev/null
++++ b/src/util/filament-width-tracker.ts
+@@ -0,0 +1,11 @@
++import Vue from 'vue'
++import { createFilamentWidthState, type FilamentWidthState } from './filament-width'
++
++// Plus4 Grease: the filament width readings the card shows, kept outside the card so they keep coming while another page
++// is open. AppFilamentWidthTracker feeds it once a second; it lives only as long as this browser tab.
++export const filamentWidthTracker = Vue.observable<{ state: FilamentWidthState; now: number; raw: number[] }>({
++  state: createFilamentWidthState(),
++  now: 0,
++  // The sensor's own last few readings (no correction, filament present), for taking a caliper correction.
++  raw: []
++})
+diff --git a/src/util/filament-width.ts b/src/util/filament-width.ts
+new file mode 100644
+index 0000000..097c19c
+--- /dev/null
++++ b/src/util/filament-width.ts
+@@ -0,0 +1,216 @@
++// Plus4 Grease: the filament width card. The Plus 4's toolhead has a hall-effect width sensor
++// ([hall_filament_width_sensor]); Klipper reports what it reads as `Diameter`. QIDI uses it only to detect filament, but
++// the reading also shows filament that is thinner or thicker than it should be, or stretching on its way in.
++//
++// The sensor measures with a spring-loaded arm, so soft filament (TPU) reads thin. A correction per material, taken by
++// measuring the filament with calipers, makes the card show what the calipers would. It changes only what the card
++// shows: Klipper's own reading and the flow stay as they are.
++
++export const DEFAULT_NOMINAL = 1.75
++export const DEFAULT_TOLERANCE = 0.1
++// How long a reading must stay out of tolerance before the card warns, so one noisy sample doesn't.
++export const WARN_AFTER_SECONDS = 10
++// The graph shows this many seconds, one point per second.
++export const HISTORY_SECONDS = 300
++
++export interface FilamentWidthSettings {
++  corrections: Record<string, number>;
++  tolerance: number;
++}
++
++// Samples and a print's numbers keep the sensor's own reading; the card adds the material's correction when it shows
++// them, so a correction taken partway through applies to the whole graph and print.
++export interface FilamentWidthSample {
++  time: number; // seconds
++  diameter: number; // the sensor's reading
++}
++
++export interface FilamentWidthPrintStats {
++  filename: string;
++  started: number; // seconds
++  count: number;
++  sum: number;
++  min: number;
++  minLayer: number | null;
++  max: number;
++  maxLayer: number | null;
++}
++
++export interface FilamentWidthState {
++  history: FilamentWidthSample[];
++  print: FilamentWidthPrintStats | null;
++  outSince: number | null; // when the reading last went out of tolerance, while it stays out
++  outSide: -1 | 1 | 0;
++  printing: boolean;
++}
++
++export interface FilamentWidthInput {
++  time: number; // seconds
++  diameter: number | null; // as Klipper reports it
++  minDiameter: number; // below this there's no filament at the sensor
++  correction: number;
++  nominal: number;
++  tolerance: number;
++  printing: boolean; // printing or paused
++  filename: string;
++  layer: number | null;
++}
++
++export type FilamentWidthLevel = 'none' | 'ok' | 'warn' | 'bad'
++
++export const createFilamentWidthState = (): FilamentWidthState => ({
++  history: [],
++  print: null,
++  outSince: null,
++  outSide: 0,
++  printing: false
++})
++
++const round3 = (value: number) => Math.round(value * 1000) / 1000
++
++export const filamentPresent = (diameter: number | null, minDiameter: number): diameter is number =>
++  diameter != null && Number.isFinite(diameter) && diameter > minDiameter
++
++// The material the card keys its correction by: the Box slot feeding the toolhead, else the print's own filament
++// type, else "Default".
++export const filamentWidthMaterial = (boxType: string | null | undefined, fileType: string | null | undefined): string => {
++  const clean = (value: string | null | undefined) => {
++    const text = (value ?? '').split(';')[0].trim().toUpperCase()
++
++    return text && text !== 'NONE' ? text : ''
++  }
++
++  return clean(boxType) || clean(fileType) || 'Default'
++}
++
++export const filamentWidthSettings = (value: Partial<FilamentWidthSettings> | null | undefined): FilamentWidthSettings => {
++  const corrections: Record<string, number> = {}
++
++  for (const [key, correction] of Object.entries(value?.corrections ?? {})) {
++    const number = Number(correction)
++
++    if (Number.isFinite(number) && Math.abs(number) <= 1) corrections[key] = number
++  }
++
++  const tolerance = Number(value?.tolerance)
++
++  return {
++    corrections,
++    tolerance: Number.isFinite(tolerance) && tolerance >= 0.02 && tolerance <= 0.5 ? tolerance : DEFAULT_TOLERANCE
++  }
++}
++
++// What the card shows: the sensor's reading plus the material's correction, or null with no filament at the sensor.
++export const correctedDiameter = (diameter: number | null, minDiameter: number, correction: number): number | null =>
++  filamentPresent(diameter, minDiameter) ? round3(diameter + correction) : null
++
++// The correction that makes the current reading match a caliper measurement. `readings` are the sensor's own recent
++// values (not corrected); their average evens out the sensor's noise.
++export const correctionFromCalipers = (calipers: number, readings: number[]): number | null => {
++  const usable = readings.filter(value => Number.isFinite(value) && value > 0)
++
++  if (!Number.isFinite(calipers) || calipers < 1 || calipers > 3 || usable.length === 0) return null
++
++  const average = usable.reduce((sum, value) => sum + value, 0) / usable.length
++  const correction = round3(calipers - average)
++
++  return Math.abs(correction) <= 1 ? correction : null
++}
++
++// Adds one reading. History keeps one point per second for HISTORY_SECONDS. A print's min, average and max count
++// only readings with filament at the sensor, from when the print starts until the next one does, so they're still there
++// after a print fails.
++export const addFilamentWidthSample = (state: FilamentWidthState, input: FilamentWidthInput): FilamentWidthState => {
++  const present = filamentPresent(input.diameter, input.minDiameter)
++  const reading = present ? round3(input.diameter as number) : null
++  const value = reading == null ? null : round3(reading + input.correction)
++  let history = state.history.filter(sample => sample.time > input.time - HISTORY_SECONDS)
++
++  if (reading != null) {
++    const second = Math.floor(input.time)
++    const last = history[history.length - 1]
++
++    history = last && Math.floor(last.time) === second
++      ? [...history.slice(0, -1), { time: input.time, diameter: reading }]
++      : [...history, { time: input.time, diameter: reading }]
++  }
++
++  let print = state.print
++
++  // A new print starts the stats over; a page opened partway through a print starts them from then.
++  if (input.printing && input.filename && (!state.printing || print == null || print.filename !== input.filename)) {
++    print = { filename: input.filename, started: input.time, count: 0, sum: 0, min: Infinity, minLayer: null, max: -Infinity, maxLayer: null }
++  }
++
++  if (input.printing && print && reading != null) {
++    print = {
++      ...print,
++      count: print.count + 1,
++      sum: print.sum + reading,
++      ...(reading < print.min ? { min: reading, minLayer: input.layer } : {}),
++      ...(reading > print.max ? { max: reading, maxLayer: input.layer } : {})
++    }
++  }
++
++  let outSince = state.outSince
++  let outSide = state.outSide
++
++  if (value == null) {
++    outSince = null
++    outSide = 0
++  } else {
++    const deviation = value - input.nominal
++    const side: -1 | 0 | 1 = Math.abs(deviation) > input.tolerance ? (deviation < 0 ? -1 : 1) : 0
++
++    if (side === 0) {
++      outSince = null
++    } else if (side !== outSide || outSince == null) {
++      outSince = input.time
++    }
++
++    outSide = side
++  }
++
++  return { history, print, outSince, outSide, printing: input.printing }
++}
++
++// ok within tolerance; warn once out of tolerance for WARN_AFTER_SECONDS; bad once 3 tolerances out for as long.
++export const filamentWidthLevel = (
++  state: FilamentWidthState,
++  value: number | null,
++  nominal: number,
++  tolerance: number,
++  now: number
++): FilamentWidthLevel => {
++  if (value == null) return 'none'
++
++  if (state.outSince == null || now - state.outSince < WARN_AFTER_SECONDS) return 'ok'
++
++  return Math.abs(value - nominal) > tolerance * 3 ? 'bad' : 'warn'
++}
++
++// The print's average reading, with the correction added.
++export const filamentWidthAverage = (print: FilamentWidthPrintStats | null, correction = 0): number | null =>
++  print && print.count > 0 ? round3(print.sum / print.count + correction) : null
++
++// The graph's line as SVG points in a width x height box, with the vertical range around the nominal diameter.
++export const filamentWidthPolyline = (
++  history: FilamentWidthSample[],
++  now: number,
++  width: number,
++  height: number,
++  low: number,
++  high: number,
++  correction = 0
++): string => {
++  const y = (value: number) => {
++    const clamped = Math.min(high, Math.max(low, value))
++
++    return round3(height - (clamped - low) / (high - low) * height)
++  }
++
++  return history
++    .filter(sample => sample.time > now - HISTORY_SECONDS)
++    .map(sample => `${round3((1 - (now - sample.time) / HISTORY_SECONDS) * width)},${y(sample.diameter + correction)}`)
++    .join(' ')
++}
 diff --git a/src/util/persona.ts b/src/util/persona.ts
 new file mode 100644
 index 0000000..aff14fe
@@ -6865,7 +7941,7 @@ index 0000000..78a0dbd
 +  return buttons.map(button => ({ ...button, active: active.includes(button.tool) }))
 +}
 diff --git a/src/views/Dashboard.vue b/src/views/Dashboard.vue
-index a01c43f..bf828e9 100644
+index a01c43f..5ee2d11 100644
 --- a/src/views/Dashboard.vue
 +++ b/src/views/Dashboard.vue
 @@ -1,5 +1,14 @@
@@ -6891,22 +7967,24 @@ index a01c43f..bf828e9 100644
  import StateMixin from '@/mixins/state'
  import PrinterStatusCard from '@/components/widgets/status/PrinterStatusCard.vue'
  import JobsCard from '@/components/widgets/jobs/JobsCard.vue'
-@@ -55,6 +65,7 @@ import SensorsCard from '@/components/widgets/sensors/SensorsCard.vue'
+@@ -55,6 +65,8 @@ import SensorsCard from '@/components/widgets/sensors/SensorsCard.vue'
  import RunoutSensorsCard from '@/components/widgets/runout-sensors/RunoutSensorsCard.vue'
  import BeaconCard from '@/components/widgets/beacon/BeaconCard.vue'
  import AfcCard from '@/components/widgets/afc/AfcCard.vue'
 +import QidiBoxCard from '@/components/widgets/qidiBox/QidiBoxCard.vue'
++import FilamentWidthCard from '@/components/widgets/filamentWidth/FilamentWidthCard.vue'
  import type Sortable from 'sortablejs'
  
  @Component({
-@@ -77,12 +88,19 @@ import type Sortable from 'sortablejs'
+@@ -77,12 +89,20 @@ import type Sortable from 'sortablejs'
      SensorsCard,
      RunoutSensorsCard,
      BeaconCard,
 -    AfcCard
 +    AfcCard,
 +    // Registered as box-card, the ID QIDI's Fluidd gives its Box card, so a layout copied from it keeps the card's place.
-+    BoxCard: QidiBoxCard
++    BoxCard: QidiBoxCard,
++    FilamentWidthCard
    }
  })
  export default class Dashboard extends Mixins(StateMixin) {
@@ -6920,10 +7998,15 @@ index a01c43f..bf828e9 100644
    mounted () {
      this.onLayoutChange()
    }
-@@ -154,6 +172,10 @@ export default class Dashboard extends Mixins(StateMixin) {
+@@ -154,6 +174,15 @@ export default class Dashboard extends Mixins(StateMixin) {
      return this.$typedGetters['printer/getSupportsAfc']
    }
  
++  // Plus4 Grease: the filament width card needs the toolhead's width sensor.
++  get hasFilamentWidthSensor (): boolean {
++    return this.$typedState.printer.printer.hall_filament_width_sensor != null
++  }
++
 +  get hasQidiBox (): boolean {
 +    return this.$typedGetters['qidiBox/getBoxCount'] > 0
 +  }
@@ -6931,15 +8014,16 @@ index a01c43f..bf828e9 100644
    get hasMacros (): boolean {
      return this.$typedGetters['macros/getVisibleMacros'].length > 0
    }
-@@ -237,6 +259,7 @@ export default class Dashboard extends Mixins(StateMixin) {
+@@ -237,6 +266,8 @@ export default class Dashboard extends Mixins(StateMixin) {
      if (item.id === 'sensors-card' && !this.hasSensors) return true
      if (item.id === 'temperature-card' && !this.hasHeatersOrTemperatureSensors) return true
      if (item.id === 'afc-card' && !this.supportsAfc) return true
 +    if (item.id === 'box-card' && !this.hasQidiBox) return true
++    if (item.id === 'filament-width-card' && !this.hasFilamentWidthSensor) return true
  
      // Otherwise return the opposite of whatever the enabled state is.
      return !item.enabled
-@@ -246,4 +269,26 @@ export default class Dashboard extends Mixins(StateMixin) {
+@@ -246,4 +277,26 @@ export default class Dashboard extends Mixins(StateMixin) {
  
  <style lang="scss" scoped>
  @import '@/scss/draggable.scss';
