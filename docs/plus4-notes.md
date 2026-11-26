@@ -146,6 +146,12 @@ Measured by CharlyBrownFR (qbdisplay) on a V2.1.1 Plus 4 with one Box, 2026-11-2
 - **`box_extras.e_endstop_state`** is 1 while filament is in the path to the toolhead.
 - **A broken-off piece left in the tube** kept `e_endstop_state` at 1 and the toolhead hall sensor at about 1.85 mm, and QIDI reported `loaded_slot` `slot0` (saved as `slot_sync` too), even after a reboot, with the spool only sitting in the Box. With the piece removed: `e_endstop_state` 0, the hall sensor -0.25 mm, `slot_sync` `slot-1`, and `b_endstop_state` went from 0 to 1. In that state `GREASE_BOX_DRY` refuses Box 1 with "slot 1A's filament is in the toolhead": refusing is right (there is filament in the tube), but the message doesn't name the stuck piece.
 
+Also from CharlyBrownFR, 2026-11-26 (qbdisplay 0.6.3, tested with three prints; not yet checked here):
+
+- **The mapping step works:** a print from QIDI Studio, one from qbdisplay with its suggested mapping, and one with T1 and T2 swapped each loaded the slots they were given.
+- **At the end of every print QIDI sets `loaded_slot` to `slot16`** (the external spool) although the filament is still in the toolhead. The next print then doesn't know which color is left in the nozzle, and its first layer showed some of the old color. This matters for `GREASE_BOX_DRY`: it finds a Box's filament in the toolhead from `last_load_slot` and `loaded_slot`, so if both stop naming the Box slot after a print, it would dry a Box holding PLA or TPU with that filament still through the feed tube. Whether `last_load_slot` changes too isn't known yet.
+- **Commands sent during QIDI's start sequence wait:** while print start waits (for example for the nozzle to cool to 140 °C before probing), Klipper runs nothing else, and anything sent then runs after the wait. That holds for the Box card's buttons and `GREASE_BOX_DRY` too.
+
 ## Box heater, PLA and the Box templates (V2.1.1)
 
 - **Owner-reported (JarvisAKF):** QIDI doesn't let the Box heat PLA or TPU because the Box's feed tubes run along the inside of its floor, right beside the heaters. Filament sitting in them gets far hotter than the air the Box's sensor reads, softens, and loaded before it hardens it can jam inside a tube. Stopping the heater just before a print isn't enough: the tubes take about 30 minutes to cool.

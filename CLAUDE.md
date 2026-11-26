@@ -77,4 +77,7 @@ keep the tests passing. Docs are plain and short, and say what was verified on a
   position (the Box tube pulling the filament in the sensor), so an opt-in `--flow-comp` is on hold; if built, it needs
   averaging, a two-point drill-bit calibration, tight limits and flexibles left off. The width card (Fluidd build 15)
   hasn't been tried on a printer yet.
-- qbdisplay flicker fix: pull request #2 to CharlyBrownFR/qbdisplay-plus4, fixed and waiting for his pre-release test.
+- **`GREASE_BOX_DRY` after a print:** QIDI sets `loaded_slot` to `slot16` at the end of every print with the filament
+  still in the toolhead (CharlyBrownFR, 2026-11-26). If `last_load_slot` changes too, the "filament in the toolhead"
+  check misses it. Read both on a printer after a Box print before changing the macro.
+- qbdisplay flicker fix: pull request #2 to CharlyBrownFR/qbdisplay-plus4, fixed and waiting for his pre-release test (not in qbdisplay 0.6.3).
