@@ -68,7 +68,9 @@ keep the tests passing. Docs are plain and short, and say what was verified on a
 - **`--box-dry` and QIDI's touchscreen program:** on the owner's printer the Box stopped loading at print start
   ("Filament NOT present", then QDE_004_005 on resume) once QIDI's touchscreen program replaced qbdisplay, and loaded
   again with `--box-dry` off. A tester's touchscreen stopped registering newly loaded filament. The first suspect is the
-  lock's wrappers around QIDI's `E_LOAD`, `E_BOX` and `EXTRUDER_LOAD` (`rename_existing`). The README says to hold off.
+  lock's wrappers around QIDI's `E_LOAD`, `E_BOX` and `EXTRUDER_LOAD` (`rename_existing`); the other is a stale
+  tool-to-slot mapping (`value_tN`, not set by prints started from qbdisplay or this Fluidd). Test plan in
+  `docs/testing.md`. The README says to hold off.
 - **"Timer too close" on `mcu` during the Beacon mesh scan**, near X187 Y171, also with Plus4 Grease uninstalled. Z
   microsteps are already 32. Waiting for the next one to read the USB log with `klipper_report.py`.
 - **Filament width sensor:** QIDI commented out Klipper's flow compensation. On TPU the reading follows the toolhead's Y

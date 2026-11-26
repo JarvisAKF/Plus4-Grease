@@ -51,6 +51,24 @@ Each release is tried on real printers before it's called tested. Add a line for
 
 Still untested: the filament width card on a printer, why the Box stopped loading with `--box-dry` and QIDI's touchscreen program, the bed mesh save change on a printer (its edit applied on the stock 1.8.2 printer, but the log lines above don't show the save itself), `--board-fan` and `--balanced-chamber` installed by Plus4 Grease (their settings have run for over a year on the Beacon printer above, written by hand), the new Fluidd's camera pass-through (no camera on the tested printer), the Box card's Eject on a printer, its Read RFID (sends QIDI's own `RFID_READ SLOT=slotN`; the tested printer has no QIDI-tagged spools to read), drying with a timer (HOURS above 0) on a printer, Edit filament, Retry, the Box self-check and the touchscreen-drying status on a printer, installing on firmware 1.8.1, the optional changes and the new Fluidd on 1.8.x, the print-start check on a printer, the lock's unlock after cooling, and QIDI's Box templates on 1.8.x, and anything at all on a 1.6.0 printer ([testing-1.6.0.md](testing-1.6.0.md)).
 
+## Plan: `--box-dry` and Box loading at print start
+
+The 0.14.3 failure (TPU from 1C, "Filament NOT present", then QDE_004_005 asking for 1A) has two possible causes that haven't been separated:
+
+- **The tool-to-slot mapping.** `T0` loads the slot in `value_t0`. QIDI Studio sets it with the print; qbdisplay and this Fluidd don't, so a print started from them keeps the last print's mapping ([plus4-notes](plus4-notes.md#tool-to-slot-mapping-and-box-state-v211)). QDE_004_005 asking for 1A fits `T0` still pointing at slot 0. The log above doesn't say how each 0.14.3 print was started.
+- **The lock's wrappers** around `E_LOAD`, `E_BOX` and `EXTRUDER_LOAD`. Nothing was printed from the Box with the lock installed before 0.14.3, under qbdisplay or QIDI's touchscreen. `E_BOX SLOT=2` and `E_LOAD SLOT=2` doing nothing visible, with no refusal message from the lock, points at the wrapping rather than the lock's rule.
+
+Steps, between prints only (install restarts Klipper):
+
+1. With qbdisplay on the printer: `install --dry-run --box-dry-pla`, then `install --box-dry-pla`.
+2. Leave Box 1 unheated for at least 30 min. Before each print, record `value_t0` to `value_t15` with `curl -s "http://<printer-ip>:7125/printer/objects/query?save_variables"`, and check `_GREASE_BOX_LOCKED` in the console.
+3. Start every print from QIDI Studio, so the mapping is set. Print the 0.14.3 TPU file from 1C, then a short ASA print from another slot (ASA goes straight through the wrappers).
+4. Pass or fail, keep `klippy.log` and run `tools/klipper_report.py`. A refusal by the lock prints its own "Box N is cooling" message.
+5. If it fails: rename `plus4-grease-box-lock.cfg` in the config folder, restart Klipper (the include then matches nothing), and print again. That separates the lock from the print-start check.
+6. Then the same with QIDI's touchscreen program in place of qbdisplay.
+
+Each row added for this says how the print was started and what `value_tN` read.
+
 ## Speed test (`tools/speed_test.py`), for faster probe moves
 
 Bill's Plus 4 (Beacon conversion, V2.1.1, 32 microsteps, 20000 mm/s² max accel). A drift is how far a motor's step count moved between two homes; 32 microsteps is one full step.

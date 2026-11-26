@@ -137,6 +137,15 @@ From [qbdisplay](https://github.com/CharlyBrownFR/qbdisplay-plus4) (CharlyBrownF
 
 QIDI's display file (`800_480.tft`) is flashed by copying a new one to `/root/800_480.tft` and restarting `makerbase-client`, which loads it onto the screen and deletes it when done; QIDI keeps the previous one as `/root/800_480.tft.bak`.
 
+## Tool-to-slot mapping and Box state (V2.1.1)
+
+Measured by CharlyBrownFR (qbdisplay) on a V2.1.1 Plus 4 with one Box, 2026-11-25. Not yet checked on the Beacon printer here.
+
+- **Tool-to-slot mapping:** QIDI's `T0` to `T15` load the slot in `save_variables`' `value_t0` to `value_t15` (`EXTRUDER_LOAD SLOT={value_tN}`, see below). QIDI Studio sends the mapping with the print. A print started some other way, from qbdisplay or from Plus4 Grease's Fluidd, which read `value_tN` but don't set it, keeps the last print's mapping, so `T0` can load a different slot from the one the file was sliced for. To read the mapping: `curl -s "http://<printer-ip>:7125/printer/objects/query?save_variables"`. `QUERY_SAVE_VARIABLES` doesn't exist on V2.1.1.
+- **`E_BOX` blocks** until that slot is done, about 13 s per slot, so several in a row run one after another. `multi_color_controller`'s `task` and `operation` show nothing while it runs. Afterwards that slot's `box_inserted_<i>` and `filament_inserted_<i>` read 0.
+- **`box_extras.e_endstop_state`** is 1 while filament is in the path to the toolhead.
+- **A broken-off piece left in the tube** kept `e_endstop_state` at 1 and the toolhead hall sensor at about 1.85 mm, and QIDI reported `loaded_slot` `slot0` (saved as `slot_sync` too), even after a reboot, with the spool only sitting in the Box. With the piece removed: `e_endstop_state` 0, the hall sensor -0.25 mm, `slot_sync` `slot-1`, and `b_endstop_state` went from 0 to 1. In that state `GREASE_BOX_DRY` refuses Box 1 with "slot 1A's filament is in the toolhead": refusing is right (there is filament in the tube), but the message doesn't name the stuck piece.
+
 ## Box heater, PLA and the Box templates (V2.1.1)
 
 - **Owner-reported (JarvisAKF):** QIDI doesn't let the Box heat PLA or TPU because the Box's feed tubes run along the inside of its floor, right beside the heaters. Filament sitting in them gets far hotter than the air the Box's sensor reads, softens, and loaded before it hardens it can jam inside a tube. Stopping the heater just before a print isn't enough: the tubes take about 30 minutes to cool.
